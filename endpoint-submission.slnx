@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ENAClient/ENAClient.fsproj" />
+    <Project Path="src/EndpointSubmission.Service/EndpointSubmission.Service.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ENAClient.Tests/ENAClient.Tests.fsproj" />
+    <Project Path="tests/EndpointSubmission.Tests/EndpointSubmission.Tests.csproj" />
+  </Folder>
+</Solution>
