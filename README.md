@@ -12,9 +12,11 @@ convert — ARC → endpoint-format conversion belongs to a separate library.
 
 ## Status
 
-**M1 complete**: hook endpoint, data model, guards, compose stack. Nothing is submitted to a repository
-yet. See [plans/0001-endpoint-submission-poc.md](plans/0001-endpoint-submission-poc.md) for the full plan
-and the open questions that still gate later milestones.
+The ingestion foundation now has explicit ENA and WorkflowHub hook handlers backed by one submission
+model. Both capture the RO-Crate while the short-lived DataHUB PAT is valid and return an
+endpoint-specific preview URL. The preview pages currently show captured provenance only; nothing is
+submitted to either repository yet. See [plans/0001-endpoint-submission-poc.md](plans/0001-endpoint-submission-poc.md)
+for the refocused POC and acceptance criteria.
 
 ## Layout
 
@@ -22,8 +24,10 @@ Mirrors [AVPR](https://github.com/nfdi4plants/arc-validate-package-registry): a 
 with F# libraries beside it.
 
 ```
-src/EndpointSubmission.Service   C#  — hook endpoint, pages, EF Core/Npgsql
-src/ENAClient                    F#  — Webin v2 client (M3)
+src/EndpointSubmission.Service   C#  — shared ingestion, endpoint handlers, pages, EF Core/Npgsql
+  Endpoints/ENA                      — ENA payload handling and preview
+  Endpoints/WorkflowHub              — WorkflowHub payload handling and preview
+src/ENAClient                    F#  — future Webin v2 execution client
 tests/                               — xUnit
 docs/hook-contract.md                — the ARC App invocation contract
 plans/                               — design record
@@ -70,9 +74,9 @@ Plus `PostgresConnectionString` at the root.
 
 ## Security notes
 
-- **No credential of any kind is persisted.** The DataHUB token from the hook body is used during that
-  request and discarded; endpoint-repository credentials will be exchanged for a short-lived token and
-  the password dropped immediately (M4).
+- **No credential of any kind is persisted.** Each endpoint handler receives the initial hook request,
+  including its DataHUB PAT, so all common and endpoint-specific authenticated reads can finish during
+  that request. The RO-Crate snapshot is retained; the PAT is discarded.
 - **`ro_crate_url` is caller-supplied and gets fetched**, so it is allowlisted, HTTPS-only, and
   decomposed into generic-package components that the request URL is then rebuilt from — the address
   actually requested is one this service constructed, not a string the caller handed it. Without that it

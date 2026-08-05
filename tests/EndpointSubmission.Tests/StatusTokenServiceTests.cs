@@ -35,6 +35,16 @@ public class StatusTokenServiceTests
         Assert.Equal(64, minted.Hash.Length); // SHA-256, hex
     }
 
+    [Fact]
+    public void Verify_accepts_only_the_token_that_produced_the_hash()
+    {
+        var minted = _tokens.Mint();
+
+        Assert.True(_tokens.Verify(minted.Token, minted.Hash));
+        Assert.False(_tokens.Verify(_tokens.Mint().Token, minted.Hash));
+        Assert.False(_tokens.Verify(null, minted.Hash));
+    }
+
     [Theory]
     [InlineData("user@example.org", "user@example.org")]
     [InlineData("User@Example.ORG", "user@example.org")]

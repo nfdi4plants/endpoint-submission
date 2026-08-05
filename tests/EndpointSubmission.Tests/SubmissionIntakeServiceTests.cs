@@ -1,5 +1,7 @@
 using System.Text.Json;
 using EndpointSubmission.Service.Data;
+using EndpointSubmission.Service.Endpoints.ENA;
+using EndpointSubmission.Service.Endpoints.WorkflowHub;
 using EndpointSubmission.Service.Models;
 using EndpointSubmission.Service.Services;
 using Microsoft.EntityFrameworkCore;
@@ -44,7 +46,7 @@ public class SubmissionIntakeServiceTests
         }
     }
 
-    private static (SubmissionIntakeService Service, SubmissionDbContext Db, FakeDataHub Hub) Build(
+    private static (EnaSubmissionHandler Service, SubmissionDbContext Db, FakeDataHub Hub) Build(
         bool allowProduction = false)
     {
         var db = new SubmissionDbContext(new DbContextOptionsBuilder<SubmissionDbContext>()
@@ -61,11 +63,33 @@ public class SubmissionIntakeServiceTests
         });
 
         var hub = new FakeDataHub();
-        var service = new SubmissionIntakeService(
+        var intake = new SubmissionIntakeService(
             db, hub, new DataHubUrlGuard(options), new StatusTokenService(), options,
             NullLogger<SubmissionIntakeService>.Instance);
 
+        var service = new EnaSubmissionHandler(intake);
+
         return (service, db, hub);
+    }
+
+    private static (WorkflowHubSubmissionHandler Service, SubmissionDbContext Db, FakeDataHub Hub) BuildWorkflowHub()
+    {
+        var db = new SubmissionDbContext(new DbContextOptionsBuilder<SubmissionDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options);
+        var options = Options.Create(new EndpointSubmissionOptions
+        {
+            AllowedDataHubHosts = ["gitdev.nfdi4plants.org"],
+            PublicBaseUrl = "https://submit.example.org",
+            HookMaxAgeSeconds = 300,
+            HookSharedSecret = "secret"
+        });
+        var hub = new FakeDataHub();
+        var intake = new SubmissionIntakeService(
+            db, hub, new DataHubUrlGuard(options), new StatusTokenService(), options,
+            NullLogger<SubmissionIntakeService>.Instance);
+
+        return (new WorkflowHubSubmissionHandler(intake), db, hub);
     }
 
     private static HookRequest Hook(object? packagePayload = null, long? iat = null, string? roCrateUrl = RoCrateUrl) =>
@@ -83,12 +107,12 @@ public class SubmissionIntakeServiceTests
     [Fact]
     public async Task Accepts_a_valid_hook_and_returns_a_follow_me_url()
     {
-        var (service, db, _) = Build();
+        var (service, db, hub) = Build();
 
         var result = Assert.IsType<IntakeResult.Accepted>(
-            await service.IntakeAsync(Hook(), "ena", default));
+            await service.HandleAsync(Hook(), default));
 
-        Assert.StartsWith("https://submit.example.org/submissions/", result.FollowMe);
+        Assert.StartsWith("https://submit.example.org/ena/submissions/", result.FollowMe);
         Assert.Contains("?t=", result.FollowMe);
 
         var stored = await db.Submissions.SingleAsync();
@@ -97,6 +121,22 @@ public class SubmissionIntakeServiceTests
         Assert.Equal("gitdev.nfdi4plants.org", stored.DataHubHost);
         Assert.Equal(SubmissionTarget.Sandbox, stored.Target);
         Assert.Equal(SubmissionStatus.Created, stored.Status);
+        Assert.Equal(hub.RoCrate, stored.RoCrateJson);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_uses_the_same_submission_model_with_its_own_route()
+    {
+        var (service, db, hub) = BuildWorkflowHub();
+
+        var result = Assert.IsType<IntakeResult.Accepted>(
+            await service.HandleAsync(Hook(new { target = "sandbox", contract_version = 1 }), default));
+
+        Assert.StartsWith("https://submit.example.org/workflowhub/submissions/", result.FollowMe);
+        var stored = await db.Submissions.SingleAsync();
+        Assert.Equal("workflowhub", stored.Endpoint);
+        Assert.Equal(hub.RoCrate, stored.RoCrateJson);
+        Assert.Equal(3, hub.TokensSeen.Count);
     }
 
     [Fact]
@@ -104,7 +144,7 @@ public class SubmissionIntakeServiceTests
     {
         var (service, db, hub) = Build();
 
-        await service.IntakeAsync(Hook(), "ena", default);
+        await service.HandleAsync(Hook(), default);
 
         // All three reads happened while the token was still alive.
         Assert.Equal(3, hub.TokensSeen.Count);
@@ -127,7 +167,7 @@ public class SubmissionIntakeServiceTests
         // Authorization is "the clicker is sufficient", so this is the only attestation
         // that the submission was sanctioned.
         var (service, db, _) = Build();
-        await service.IntakeAsync(Hook(), "ena", default);
+        await service.HandleAsync(Hook(), default);
 
         var stored = await db.Submissions.SingleAsync();
         Assert.Equal("kschneider", stored.SubmitterGitLabUser);
@@ -139,7 +179,7 @@ public class SubmissionIntakeServiceTests
     public async Task Stores_the_package_payload_verbatim()
     {
         var (service, db, _) = Build();
-        await service.IntakeAsync(Hook(new { target = "sandbox", checklist = "ERC000011", contract_version = 1 }), "ena", default);
+        await service.HandleAsync(Hook(new { target = "sandbox", checklist = "ERC000011", contract_version = 1 }), default);
 
         var stored = await db.Submissions.SingleAsync();
         Assert.Contains("ERC000011", stored.PackagePayloadJson);
@@ -151,7 +191,7 @@ public class SubmissionIntakeServiceTests
         var (service, _, _) = Build();
         var stale = DateTimeOffset.UtcNow.AddHours(-1).ToUnixTimeSeconds();
 
-        var result = await service.IntakeAsync(Hook(iat: stale), "ena", default);
+        var result = await service.HandleAsync(Hook(iat: stale), default);
 
         Assert.IsType<IntakeResult.Unauthorized>(result);
     }
@@ -161,7 +201,7 @@ public class SubmissionIntakeServiceTests
     {
         var (service, _, hub) = Build();
 
-        var result = await service.IntakeAsync(Hook(roCrateUrl: "https://attacker.example/x.json"), "ena", default);
+        var result = await service.HandleAsync(Hook(roCrateUrl: "https://attacker.example/x.json"), default);
 
         Assert.IsType<IntakeResult.Rejected>(result);
         // The guard must run before anything is fetched, or the SSRF has already happened.
@@ -174,7 +214,7 @@ public class SubmissionIntakeServiceTests
         var (service, _, _) = Build(allowProduction: false);
 
         var result = Assert.IsType<IntakeResult.Rejected>(
-            await service.IntakeAsync(Hook(new { target = "production", contract_version = 1 }), "ena", default));
+            await service.HandleAsync(Hook(new { target = "production", contract_version = 1 }), default));
 
         Assert.Contains("not configured to submit to production", result.Reason);
     }
@@ -185,7 +225,7 @@ public class SubmissionIntakeServiceTests
         var (service, db, _) = Build(allowProduction: true);
 
         Assert.IsType<IntakeResult.Accepted>(
-            await service.IntakeAsync(Hook(new { target = "production", contract_version = 1 }), "ena", default));
+            await service.HandleAsync(Hook(new { target = "production", contract_version = 1 }), default));
 
         Assert.Equal(SubmissionTarget.Production, (await db.Submissions.SingleAsync()).Target);
     }
@@ -195,7 +235,7 @@ public class SubmissionIntakeServiceTests
     {
         var (service, db, _) = Build(allowProduction: true);
 
-        await service.IntakeAsync(Hook(new { }), "ena", default);
+        await service.HandleAsync(Hook(new { }), default);
 
         Assert.Equal(SubmissionTarget.Sandbox, (await db.Submissions.SingleAsync()).Target);
     }
@@ -206,7 +246,7 @@ public class SubmissionIntakeServiceTests
         var (service, _, _) = Build();
 
         var result = Assert.IsType<IntakeResult.Rejected>(
-            await service.IntakeAsync(Hook(new { target = "prod" }), "ena", default));
+            await service.HandleAsync(Hook(new { target = "prod" }), default));
 
         Assert.Contains("Unknown target", result.Reason);
     }
@@ -217,7 +257,7 @@ public class SubmissionIntakeServiceTests
         var (service, _, _) = Build();
 
         var result = Assert.IsType<IntakeResult.Rejected>(
-            await service.IntakeAsync(Hook(new { contract_version = 99 }), "ena", default));
+            await service.HandleAsync(Hook(new { contract_version = 99 }), default));
 
         Assert.Contains("contract_version", result.Reason);
     }
@@ -227,8 +267,8 @@ public class SubmissionIntakeServiceTests
     {
         var (service, db, _) = Build();
 
-        var first = Assert.IsType<IntakeResult.Accepted>(await service.IntakeAsync(Hook(), "ena", default));
-        var second = Assert.IsType<IntakeResult.Accepted>(await service.IntakeAsync(Hook(), "ena", default));
+        var first = Assert.IsType<IntakeResult.Accepted>(await service.HandleAsync(Hook(), default));
+        var second = Assert.IsType<IntakeResult.Accepted>(await service.HandleAsync(Hook(), default));
 
         Assert.Equal(1, await db.Submissions.CountAsync());
         Assert.Equal(first.Submission.Id, second.Submission.Id);
@@ -243,7 +283,7 @@ public class SubmissionIntakeServiceTests
         var (service, _, hub) = Build();
         hub.Commit = null;
 
-        Assert.IsType<IntakeResult.Upstream>(await service.IntakeAsync(Hook(), "ena", default));
+        Assert.IsType<IntakeResult.Upstream>(await service.HandleAsync(Hook(), default));
     }
 
     [Fact]
@@ -252,7 +292,7 @@ public class SubmissionIntakeServiceTests
         var (service, _, hub) = Build();
         hub.Fail = new DataHubClient.UnauthorizedError(401, "401 Unauthorized");
 
-        Assert.IsType<IntakeResult.Unauthorized>(await service.IntakeAsync(Hook(), "ena", default));
+        Assert.IsType<IntakeResult.Unauthorized>(await service.HandleAsync(Hook(), default));
     }
 
     [Theory]
@@ -266,7 +306,7 @@ public class SubmissionIntakeServiceTests
         var (service, _, hub) = Build();
         hub.Fail = new DataHubClient.DataHubError(status, $"HTTP {status}", "");
 
-        var result = Assert.IsType<IntakeResult.Upstream>(await service.IntakeAsync(Hook(), "ena", default));
+        var result = Assert.IsType<IntakeResult.Upstream>(await service.HandleAsync(Hook(), default));
         Assert.Contains(status.ToString(), result.Reason);
     }
 
@@ -277,7 +317,7 @@ public class SubmissionIntakeServiceTests
         var (service, _, hub) = Build();
         hub.Fail = new DataHubClient.DataHubError(500, "HTTP 500", "secret ARC detail");
 
-        var result = Assert.IsType<IntakeResult.Upstream>(await service.IntakeAsync(Hook(), "ena", default));
+        var result = Assert.IsType<IntakeResult.Upstream>(await service.HandleAsync(Hook(), default));
         Assert.DoesNotContain("secret ARC detail", result.Reason);
     }
 
@@ -288,7 +328,7 @@ public class SubmissionIntakeServiceTests
         // something we constructed rather than the caller's string.
         var (service, _, hub) = Build();
 
-        await service.IntakeAsync(Hook(), "ena", default);
+        await service.HandleAsync(Hook(), default);
 
         var location = Assert.Single(hub.LocationsRequested);
         Assert.Equal(2, location.ProjectId);
@@ -307,7 +347,7 @@ public class SubmissionIntakeServiceTests
         var mismatched = Hook(roCrateUrl:
             "https://gitdev.nfdi4plants.org/api/v4/projects/99/packages/generic/isa_arc_json/0.0.1/arc-ro-crate-metadata.json");
 
-        var result = Assert.IsType<IntakeResult.Rejected>(await service.IntakeAsync(mismatched, "ena", default));
+        var result = Assert.IsType<IntakeResult.Rejected>(await service.HandleAsync(mismatched, default));
 
         Assert.Contains("project 99", result.Reason);
         Assert.Empty(hub.TokensSeen);

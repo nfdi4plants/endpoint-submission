@@ -9,10 +9,12 @@ specification — any future ARC App needs the same shape.
 ## Invocation
 
 ```http
-POST /api/v1/hooks/ena
+POST /api/v1/hooks/{endpoint}
 Content-Type: application/json
 X-Hook-Secret: <shared secret>
 ```
+
+Supported endpoint paths are currently `ena` and `workflowhub`.
 
 ```json
 {
@@ -39,7 +41,7 @@ X-Hook-Secret: <shared secret>
 ### Response
 
 ```json
-{ "follow_me": "https://submit.example.org/submissions/<id>?t=<token>" }
+{ "follow_me": "https://submit.example.org/<endpoint>/submissions/<id>?t=<token>" }
 ```
 
 | Status | Meaning |
@@ -68,11 +70,28 @@ X-Hook-Secret: <shared secret>
 | `checklist` | — | ENA sample checklist. |
 | `release_date` | — | Default hold date offered on the preview page; the user may change it. |
 
+## `package_payload` — WorkflowHub
+
+The WorkflowHub contract is intentionally minimal until its useful preview fields are agreed:
+
+```json
+{
+  "contract_version": 1,
+  "target": "sandbox"
+}
+```
+
+| Field | Default | Notes |
+|---|---|---|
+| `contract_version` | `1` | Anything other than `1` is rejected. |
+| `target` | `"sandbox"` | `"sandbox"` or `"production"`; production also requires deployment opt-in. |
+
 ## Behaviour worth knowing
 
-**The token is used immediately and then discarded.** All DataHUB reads — user identity, commit
-resolution, RO-Crate retrieval — happen inside the hook request. By the time a user opens `follow_me` the
-token may be dead, so nothing is deferred to page-load time. No credential of any kind is persisted.
+**The token is passed through the endpoint handler, used immediately, and then discarded.** All common
+and endpoint-specific DataHUB reads happen inside the hook request. The service persists the RO-Crate
+snapshot needed by later previews, but no credential. By the time a user opens `follow_me`, the PAT is
+neither available nor required.
 
 **`ro_crate_url` is fetched, so it is allowlisted *and* decomposed.** A caller-supplied URL retrieved while
 holding a token is a server-side request forgery primitive. Only configured DataHUB hosts are permitted,

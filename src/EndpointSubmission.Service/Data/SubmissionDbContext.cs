@@ -22,7 +22,7 @@ public class SubmissionDbContext(DbContextOptions<SubmissionDbContext> options) 
             // Idempotency: a badge is cheap to click twice. One submission per ARC commit
             // per endpoint per target, enforced by the database rather than by a race-prone
             // read-then-write in the handler.
-            e.HasIndex(x => new { x.ProjectId, x.CommitSha, x.Endpoint, x.Target }).IsUnique();
+            e.HasIndex(x => new { x.DataHubHost, x.ProjectId, x.CommitSha, x.Endpoint, x.Target }).IsUnique();
 
             // The status page looks submissions up by token hash on every request.
             e.HasIndex(x => x.StatusTokenHash);
@@ -31,6 +31,7 @@ public class SubmissionDbContext(DbContextOptions<SubmissionDbContext> options) 
             e.Property(x => x.DataHubHost).HasMaxLength(256).IsRequired();
             e.Property(x => x.CommitSha).HasMaxLength(64).IsRequired();
             e.Property(x => x.RoCrateUrl).HasMaxLength(2048).IsRequired();
+            e.Property(x => x.RoCrateJson).HasColumnType("jsonb").IsRequired();
             e.Property(x => x.Endpoint).HasMaxLength(64).IsRequired();
             e.Property(x => x.SubmitterEmail).HasMaxLength(512);
             e.Property(x => x.SubmitterGitLabUser).HasMaxLength(256);

@@ -55,29 +55,3 @@ public class HookResponse
     public HookResponse() { }
     public HookResponse(string followMe) => FollowMe = followMe;
 }
-
-/// <summary>
-/// The ENA-specific shape expected inside <c>package_payload</c>. Unknown or malformed
-/// content is rejected rather than defaulted: a misread payload could submit to production.
-/// </summary>
-public class EnaPackagePayload
-{
-    /// <summary>"sandbox" (default) or "production".</summary>
-    [JsonPropertyName("target")]
-    public string Target { get; set; } = "sandbox";
-
-    /// <summary>ENA sample checklist, e.g. ERC000011.</summary>
-    [JsonPropertyName("checklist")]
-    public string? Checklist { get; set; }
-
-    /// <summary>Default hold date offered on the preview page; the user may change it.</summary>
-    [JsonPropertyName("release_date")]
-    public DateOnly? ReleaseDate { get; set; }
-
-    /// <summary>
-    /// Contract version. Payload schemas will change while deployed validation packages
-    /// pin older versions, so this is present from the first release rather than retrofitted.
-    /// </summary>
-    [JsonPropertyName("contract_version")]
-    public int ContractVersion { get; set; } = 1;
-}

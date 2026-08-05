@@ -24,6 +24,16 @@ public class StatusTokenService
     public string Hash(string token)
         => Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
 
+    public bool Verify(string? token, string? expectedHash)
+    {
+        if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(expectedHash))
+            return false;
+
+        var actual = System.Text.Encoding.ASCII.GetBytes(Hash(token));
+        var expected = System.Text.Encoding.ASCII.GetBytes(expectedHash);
+        return CryptographicOperations.FixedTimeEquals(actual, expected);
+    }
+
     /// <summary>
     /// Compares a submitted email against the recorded one. Case- and whitespace-insensitive,
     /// because users retype these, but fixed-time so the gate cannot be used as an oracle for

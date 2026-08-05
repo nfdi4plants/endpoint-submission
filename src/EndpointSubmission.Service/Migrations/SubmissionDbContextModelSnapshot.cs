@@ -135,6 +135,10 @@ namespace EndpointSubmission.Service.Migrations
                     b.Property<DateOnly?>("ReleaseDate")
                         .HasColumnType("date");
 
+                    b.Property<string>("RoCrateJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
                     b.Property<string>("RoCrateUrl")
                         .IsRequired()
                         .HasMaxLength(2048)
@@ -171,7 +175,7 @@ namespace EndpointSubmission.Service.Migrations
 
                     b.HasIndex("StatusTokenHash");
 
-                    b.HasIndex("ProjectId", "CommitSha", "Endpoint", "Target")
+                    b.HasIndex("DataHubHost", "ProjectId", "CommitSha", "Endpoint", "Target")
                         .IsUnique();
 
                     b.ToTable("Submissions");

@@ -1,6 +1,8 @@
 using EndpointSubmission.Service.API;
 using EndpointSubmission.Service.Authentication;
 using EndpointSubmission.Service.Data;
+using EndpointSubmission.Service.Endpoints.ENA;
+using EndpointSubmission.Service.Endpoints.WorkflowHub;
 using EndpointSubmission.Service.Pages;
 using EndpointSubmission.Service.Services;
 using HealthChecks.UI.Client;
@@ -30,6 +32,9 @@ builder.Services.AddDbContext<SubmissionDbContext>(options => options.UseNpgsql(
 builder.Services.AddSingleton<IArcMetadataReader, ArcMetadataReader>();
 
 builder.Services.AddScoped<SubmissionIntakeService>();
+builder.Services.AddScoped<SubmissionPageAccess>();
+builder.Services.AddScoped<EnaSubmissionHandler>();
+builder.Services.AddScoped<WorkflowHubSubmissionHandler>();
 builder.Services.AddSingleton<DataHubUrlGuard>();
 builder.Services.AddSingleton<StatusTokenService>();
 builder.Services.AddSingleton<HookAuthenticator>();

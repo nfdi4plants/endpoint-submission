@@ -59,6 +59,12 @@ public class Submission
 
     public string RoCrateUrl { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Immutable RO-Crate snapshot fetched while the short-lived PAT from the hook is valid.
+    /// Preview pages and endpoint preparation must use this snapshot; the PAT is never persisted.
+    /// </summary>
+    public string RoCrateJson { get; set; } = "{}";
+
     // --- Trigger provenance ---------------------------------------------------
 
     /// <summary>Verbatim package_payload as received, for audit. Parsed form is not stored.</summary>

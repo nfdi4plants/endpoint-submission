@@ -16,8 +16,8 @@ public static class Index
       <p>
         This service is triggered by clicking a validation package badge on an ARC's DataHUB
         homepage. The badge is only clickable once the validation package passes, so an ARC that
-        reaches this point has already been checked; this service converts, previews, and submits
-        it, then tracks the outcome.
+        reaches this point has already been checked; this service captures its submission inputs,
+        presents an endpoint-specific preview, and tracks the resulting transaction.
       </p>
 
       <p>

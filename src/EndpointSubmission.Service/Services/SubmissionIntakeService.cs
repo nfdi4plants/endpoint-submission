@@ -31,7 +31,12 @@ public class SubmissionIntakeService(
 {
     private readonly EndpointSubmissionOptions _options = options.Value;
 
-    public async Task<IntakeResult> IntakeAsync(HookRequest request, string endpoint, CancellationToken ct)
+    public async Task<IntakeResult> IntakeAsync(
+        HookRequest request,
+        string endpoint,
+        SubmissionTarget target,
+        DateOnly? releaseDate,
+        CancellationToken ct)
     {
         // --- Freshness ---------------------------------------------------------
         var age = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - request.IssuedAt;
@@ -49,32 +54,6 @@ public class SubmissionIntakeService(
         if (!urlGuard.TryResolve(request.RoCrateUrl, request.ProjectId, out var roCrate, out var urlError))
             return new IntakeResult.Rejected(urlError!);
 
-        // --- Package payload ---------------------------------------------------
-        EnaPackagePayload payload;
-        try
-        {
-            payload = request.PackagePayload.ValueKind == JsonValueKind.Undefined
-                ? new EnaPackagePayload()
-                : request.PackagePayload.Deserialize<EnaPackagePayload>() ?? new EnaPackagePayload();
-        }
-        catch (JsonException ex)
-        {
-            return new IntakeResult.Rejected($"package_payload is not valid for endpoint '{endpoint}': {ex.Message}");
-        }
-
-        if (payload.ContractVersion != 1)
-            return new IntakeResult.Rejected($"Unsupported package_payload contract_version {payload.ContractVersion}.");
-
-        var target = payload.Target?.Trim().ToLowerInvariant() switch
-        {
-            "production" => SubmissionTarget.Production,
-            "sandbox" or null or "" => SubmissionTarget.Sandbox,
-            _ => (SubmissionTarget?)null
-        };
-
-        if (target is null)
-            return new IntakeResult.Rejected($"Unknown target '{payload.Target}'. Expected 'sandbox' or 'production'.");
-
         // Two independent opt-ins for the irreversible option. The payload asking for
         // production is not enough; the deployment must also be configured to permit it.
         if (target == SubmissionTarget.Production && !_options.AllowProductionTarget)
@@ -88,14 +67,13 @@ public class SubmissionIntakeService(
 
         ArcSubmitter user;
         string? commitSha;
+        string roCrateJson;
         try
         {
             user = await dataHub.GetSubmitterAsync(location.Instance, token, ct);
             commitSha = await dataHub.ResolveHeadCommitAsync(location.Instance, request.ProjectId, token, ct);
 
-            // Fetched purely to prove it is reachable while the token still lives. Failing now,
-            // in front of the caller, beats failing later in front of the user.
-            _ = await dataHub.FetchRoCrateAsync(location, token, ct);
+            roCrateJson = await dataHub.FetchRoCrateAsync(location, token, ct);
         }
         catch (DataHubClient.UnauthorizedError)
         {
@@ -115,7 +93,8 @@ public class SubmissionIntakeService(
 
         // --- Persist -----------------------------------------------------------
         var existing = await db.Submissions.FirstOrDefaultAsync(
-            s => s.ProjectId == request.ProjectId
+            s => s.DataHubHost == location.Instance.Host
+              && s.ProjectId == request.ProjectId
               && s.CommitSha == commitSha
               && s.Endpoint == endpoint
               && s.Target == target,
@@ -139,7 +118,7 @@ public class SubmissionIntakeService(
             await db.SaveChangesAsync(ct);
 
             logger.LogInformation("Re-click for submission {SubmissionId}", existing.Id);
-            return new IntakeResult.Accepted(existing, BuildFollowMe(existing.Id, minted.Token));
+            return new IntakeResult.Accepted(existing, BuildFollowMe(existing.Id, endpoint, minted.Token));
         }
 
         var submission = new Submission
@@ -149,16 +128,17 @@ public class SubmissionIntakeService(
             DataHubHost = location.Instance.Host,
             CommitSha = commitSha!,
             RoCrateUrl = request.RoCrateUrl!,
+            RoCrateJson = roCrateJson,
             PackagePayloadJson = request.PackagePayload.ValueKind == JsonValueKind.Undefined
                 ? "{}"
                 : request.PackagePayload.GetRawText(),
             Endpoint = endpoint,
-            Target = target.Value,
+            Target = target,
             SubmitterGitLabUser = user.Username,
             SubmitterGitLabUserId = user.UserId,
             SubmitterEmail = user.Email ?? string.Empty,
             StatusTokenHash = minted.Hash,
-            ReleaseDate = payload.ReleaseDate,
+            ReleaseDate = releaseDate,
             Status = SubmissionStatus.Created
         };
 
@@ -166,7 +146,7 @@ public class SubmissionIntakeService(
         {
             Step = "hook.received",
             Message = $"Submission opened by {user.Username} for {request.ProjectName} at {commitSha![..Math.Min(8, commitSha.Length)]} " +
-                      $"(target: {target.Value.ToString().ToLowerInvariant()})."
+                      $"(target: {target.ToString().ToLowerInvariant()})."
         });
 
         db.Submissions.Add(submission);
@@ -182,7 +162,8 @@ public class SubmissionIntakeService(
             db.ChangeTracker.Clear();
 
             var winner = await db.Submissions.FirstOrDefaultAsync(
-                s => s.ProjectId == request.ProjectId && s.CommitSha == commitSha
+                s => s.DataHubHost == location.Instance.Host
+                  && s.ProjectId == request.ProjectId && s.CommitSha == commitSha
                   && s.Endpoint == endpoint && s.Target == target, ct);
 
             if (winner is null) throw; // Not the race; a real failure.
@@ -191,16 +172,16 @@ public class SubmissionIntakeService(
             winner.UpdatedAt = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(ct);
 
-            return new IntakeResult.Accepted(winner, BuildFollowMe(winner.Id, minted.Token));
+            return new IntakeResult.Accepted(winner, BuildFollowMe(winner.Id, endpoint, minted.Token));
         }
 
         logger.LogInformation("Opened submission {SubmissionId} for project {ProjectId}", submission.Id, submission.ProjectId);
-        return new IntakeResult.Accepted(submission, BuildFollowMe(submission.Id, minted.Token));
+        return new IntakeResult.Accepted(submission, BuildFollowMe(submission.Id, endpoint, minted.Token));
     }
 
-    private string BuildFollowMe(Guid id, string token)
+    private string BuildFollowMe(Guid id, string endpoint, string token)
     {
         var baseUrl = _options.PublicBaseUrl.TrimEnd('/');
-        return $"{baseUrl}/submissions/{id}?t={token}";
+        return $"{baseUrl}/{endpoint}/submissions/{id}?t={token}";
     }
 }

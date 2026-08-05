@@ -1,5 +1,14 @@
+using System.Text.Json;
+using EndpointSubmission.Service.Data;
+using EndpointSubmission.Service.Endpoints.ENA;
+using EndpointSubmission.Service.Endpoints.WorkflowHub;
+using EndpointSubmission.Service.Models;
+using EndpointSubmission.Service.Pages;
 using EndpointSubmission.Service.Pages.Components;
 using EndpointSubmission.Service.Pages.Handlers;
+using EndpointSubmission.Service.Services;
+using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.EntityFrameworkCore;
 
 namespace EndpointSubmission.Tests;
 
@@ -81,4 +90,67 @@ public class PageRenderingTests
         Assert.DoesNotContain("Exception", result.ResponseContent);
         Assert.DoesNotContain("Stack", result.ResponseContent);
     }
+
+    [Fact]
+    public async Task Endpoint_previews_use_the_same_submission_but_render_endpoint_specific_pages()
+    {
+        var db = new SubmissionDbContext(new DbContextOptionsBuilder<SubmissionDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options);
+        var tokens = new StatusTokenService();
+        var enaToken = tokens.Mint();
+        var workflowHubToken = tokens.Mint();
+
+        var ena = Submission("ena", "<script>ena arc</script>", enaToken.Hash);
+        var workflowHub = Submission("workflowhub", "workflow arc", workflowHubToken.Hash);
+        db.Submissions.AddRange(ena, workflowHub);
+        await db.SaveChangesAsync();
+
+        var access = new SubmissionPageAccess(db, tokens);
+        var enaResult = Assert.IsType<ContentHttpResult>(
+            await EnaPreviewHandlers.Render(ena.Id, enaToken.Token, access, default));
+        var workflowHubResult = Assert.IsType<ContentHttpResult>(
+            await WorkflowHubPreviewHandlers.Render(
+                workflowHub.Id, workflowHubToken.Token, access, default));
+
+        Assert.Contains("ENA submission preview", enaResult.ResponseContent);
+        Assert.Contains("&lt;script&gt;ena arc&lt;/script&gt;", enaResult.ResponseContent);
+        Assert.Contains("WorkflowHub submission preview", workflowHubResult.ResponseContent);
+    }
+
+    [Fact]
+    public async Task Endpoint_preview_rejects_a_wrong_or_cross_endpoint_token()
+    {
+        var db = new SubmissionDbContext(new DbContextOptionsBuilder<SubmissionDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options);
+        var tokens = new StatusTokenService();
+        var minted = tokens.Mint();
+        var submission = Submission("ena", "arc", minted.Hash);
+        db.Submissions.Add(submission);
+        await db.SaveChangesAsync();
+        var access = new SubmissionPageAccess(db, tokens);
+
+        Assert.IsType<NotFound>(
+            await EnaPreviewHandlers.Render(submission.Id, "wrong", access, default));
+        Assert.IsType<NotFound>(
+            await WorkflowHubPreviewHandlers.Render(submission.Id, minted.Token, access, default));
+    }
+
+    private static Submission Submission(string endpoint, string projectName, string tokenHash) => new()
+    {
+        ProjectId = 2,
+        ProjectName = projectName,
+        DataHubHost = "git.example.org",
+        CommitSha = "0123456789abcdef",
+        RoCrateUrl = "https://git.example.org/crate.json",
+        RoCrateJson = JsonSerializer.Serialize(new { name = "arc" }),
+        PackagePayloadJson = JsonSerializer.Serialize(new { target = "sandbox", contract_version = 1 }),
+        Endpoint = endpoint,
+        Target = SubmissionTarget.Sandbox,
+        SubmitterGitLabUser = "user",
+        SubmitterGitLabUserId = 7,
+        SubmitterEmail = "user@example.org",
+        StatusTokenHash = tokenHash
+    };
 }
