@@ -2,9 +2,11 @@
   <Folder Name="/src/">
     <Project Path="src/ENAClient/ENAClient.fsproj" />
     <Project Path="src/EndpointSubmission.Service/EndpointSubmission.Service.csproj" />
+    <Project Path="src/WfHubClient/WfHubClient.fsproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/ENAClient.Tests/ENAClient.Tests.fsproj" />
     <Project Path="tests/EndpointSubmission.Tests/EndpointSubmission.Tests.csproj" />
+    <Project Path="tests/WfHubClient.Tests/WfHubClient.Tests.fsproj" />
   </Folder>
 </Solution>

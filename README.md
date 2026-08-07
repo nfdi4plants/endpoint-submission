@@ -8,7 +8,8 @@ repository, transacts with it, and tracks the outcome.
 
 Because the badge is only clickable when the validation package passes, curation and submission-readiness
 are upstream concerns. This service does not curate, does not collect missing metadata, and does not
-convert — ARC → endpoint-format conversion belongs to a separate library.
+convert — ARC → endpoint-format conversion belongs to separate libraries. For WorkflowHub that library
+is [WfHubClient](src/WfHubClient/README.md), maintained in this repo as its own project.
 
 ## Status
 
@@ -28,7 +29,8 @@ src/EndpointSubmission.Service   C#  — shared ingestion, endpoint handlers, pa
   Endpoints/ENA                      — ENA payload handling and preview
   Endpoints/WorkflowHub              — WorkflowHub payload handling and preview
 src/ENAClient                    F#  — future Webin v2 execution client
-tests/                               — xUnit
+src/WfHubClient                  F#  — ARC to WorkflowHub packing and upload client
+tests/                               — xUnit and Expecto
 docs/hook-contract.md                — the ARC App invocation contract
 plans/                               — design record
 ```
