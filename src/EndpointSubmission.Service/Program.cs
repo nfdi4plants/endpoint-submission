@@ -37,7 +37,14 @@ builder.Services.AddScoped<EnaSubmissionHandler>();
 builder.Services.AddScoped<WorkflowHubSubmissionHandler>();
 builder.Services.AddSingleton<DataHubUrlGuard>();
 builder.Services.AddSingleton<StatusTokenService>();
-builder.Services.AddSingleton<HookAuthenticator>();
+if (builder.Environment.IsDevelopment())
+{
+    builder.Services.AddSingleton<IHookAuthenticator, DevelopmentHookAuthenticator>();
+}
+else
+{
+    builder.Services.AddSingleton<IHookAuthenticator, SharedSecretHookAuthenticator>();
+}
 
 builder.Services.AddHealthChecks()
     .AddNpgSql(connectionString ?? string.Empty, name: "submissions-db");

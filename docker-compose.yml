@@ -8,17 +8,8 @@ services:
       dockerfile: src/EndpointSubmission.Service/Dockerfile
     ports:
       - "8081:8080"
-    environment:
-      - ASPNETCORE_ENVIRONMENT=Development
-      - ASPNETCORE_HTTP_PORTS=8080
-      - PostgresConnectionString=Host=submission_db;Port=5432;Database=endpoint_submission;Username=postgres;Password=postgres
-      # Only hosts listed here may be fetched. Empty means "fetch nothing" — see DataHubUrlGuard.
-      - EndpointSubmission__AllowedDataHubHosts__0=gitdev.nfdi4plants.org
-      # Never true in a compose file. Production submission is irreversible and must be a
-      # deliberate deployment-level decision.
-      - EndpointSubmission__AllowProductionTarget=false
-      - EndpointSubmission__PublicBaseUrl=http://localhost:8081
-      - EndpointSubmission__HookSharedSecret=dev-only-hook-secret-change-me
+    env_file:
+      - .env
     networks:
       - endpointsubmission-network
     depends_on:

@@ -3,6 +3,13 @@ using Microsoft.Extensions.Options;
 
 namespace EndpointSubmission.Service.Authentication;
 
+public interface IHookAuthenticator
+{
+    bool IsConfigured { get; }
+
+    bool IsAuthentic(HttpRequest request);
+}
+
 /// <summary>
 /// Authenticates the caller of a hook endpoint via a shared secret header.
 ///
@@ -11,8 +18,8 @@ namespace EndpointSubmission.Service.Authentication;
 /// accepts. This header is defence in depth on top of that — it keeps unauthenticated
 /// callers from consuming resources, probing the host allowlist, or creating records at all.
 ///
-/// The service refuses to serve the hook when no secret is configured rather than falling
-/// open, because this endpoint leads to minting permanent public identifiers.
+/// Outside Development, the service refuses to serve the hook when no secret is configured
+/// rather than falling open, because this endpoint leads to minting permanent public identifiers.
 ///
 /// Caveat worth remembering: the <c>iat</c> freshness check in SubmissionIntakeService only
 /// deters replay to the extent the envelope is authenticated. If AaaS turns out to sign its
@@ -20,7 +27,8 @@ namespace EndpointSubmission.Service.Authentication;
 /// would strengthen both controls at once. Replacing the body of <see cref="IsAuthentic"/>
 /// is sufficient; the call site does not change.
 /// </summary>
-public class HookAuthenticator(IOptions<EndpointSubmissionOptions> options)
+public sealed class SharedSecretHookAuthenticator(IOptions<EndpointSubmissionOptions> options)
+    : IHookAuthenticator
 {
     public const string HeaderName = "X-Hook-Secret";
 
@@ -41,4 +49,15 @@ public class HookAuthenticator(IOptions<EndpointSubmissionOptions> options)
             System.Security.Cryptography.SHA256.HashData(expected),
             System.Security.Cryptography.SHA256.HashData(actual));
     }
+}
+
+/// <summary>
+/// Allows local development hooks without coordinating a shared secret. This implementation
+/// must only be registered when the ASP.NET Core environment is Development.
+/// </summary>
+public sealed class DevelopmentHookAuthenticator : IHookAuthenticator
+{
+    public bool IsConfigured => true;
+
+    public bool IsAuthentic(HttpRequest request) => true;
 }

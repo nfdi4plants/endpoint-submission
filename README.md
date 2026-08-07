@@ -42,8 +42,12 @@ keep F# `Async`/`Option` types out of the service and to keep intake testable wi
 ## Running
 
 ```bash
+cp .env.example .env
 docker compose up -d --build
 ```
+
+Edit `.env` for the local deployment. It is ignored by Git; `.env.example` is the committed list of
+supported service variables and safe development defaults.
 
 | | |
 |---|---|
@@ -68,9 +72,13 @@ Under the `EndpointSubmission` section (or `EndpointSubmission__*` environment v
 | `AllowProductionTarget` | `false` | Master switch for production submission. |
 | `PublicBaseUrl` | — | Origin used to build `follow_me` URLs. |
 | `HookMaxAgeSeconds` | `300` | How stale an `iat` may be. |
-| `HookSharedSecret` | — | Provisional caller authentication. Unset means the hook refuses to serve. |
+| `HookSharedSecret` | — | Provisional caller authentication outside Development. Unset means the hook refuses to serve. |
 
 Plus `PostgresConnectionString` at the root.
+
+In the `Development` environment, hook authentication is bypassed by a development-only
+`IHookAuthenticator` registration. Other environments always use the shared-secret authenticator and
+fail closed when `HookSharedSecret` is absent.
 
 ## Security notes
 

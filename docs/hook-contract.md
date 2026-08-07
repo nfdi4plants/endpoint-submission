@@ -15,6 +15,7 @@ X-Hook-Secret: <shared secret>
 ```
 
 Supported endpoint paths are currently `ena` and `workflowhub`.
+`X-Hook-Secret` is not required when the service runs in the `Development` environment.
 
 ```json
 {
@@ -48,7 +49,7 @@ Supported endpoint paths are currently `ena` and `workflowhub`.
 |---|---|
 | 200 | Submission opened (or re-opened). Send the user to `follow_me`. |
 | 400 | Malformed payload, disallowed host, unknown target, unsupported contract version. |
-| 401 | Missing/incorrect `X-Hook-Secret`, stale `iat`, or a `gitlab_token` the DataHUB rejected. |
+| 401 | Outside Development: missing/incorrect `X-Hook-Secret`; or a stale `iat`; or a `gitlab_token` the DataHUB rejected. |
 | 502 | The DataHUB could not be read (commit unresolvable, RO-Crate unavailable). |
 | 503 | This deployment has no hook secret configured and refuses to serve the endpoint. |
 
@@ -116,12 +117,13 @@ working. This is deliberate: a user who loses their status link gets it back by 
 configured to allow it. Submission mints permanent public identifiers, so a single misconfiguration must
 not be able to cause one.
 
-**Caller authentication is a shared secret, deliberately.** `X-Hook-Secret` is required and the service
-refuses to serve the hook when none is configured rather than falling open. It is defence in depth: the
-load-bearing authenticator is `gitlab_token`, since no submission can be created without one the DataHUB
-accepts. One consequence to keep in mind — the `iat` freshness check only deters replay to the extent the
-envelope is authenticated, so if AaaS signs its payloads, verifying that signature would be a strict
-improvement over the shared secret rather than a parallel mechanism.
+**Caller authentication is a shared secret, deliberately.** Outside the `Development` environment,
+`X-Hook-Secret` is required and the service refuses to serve the hook when none is configured rather than
+falling open. Development uses a DI-provided bypass so local callers need no shared secret. The shared
+secret is defence in depth: the load-bearing authenticator is `gitlab_token`, since no submission can be
+created without one the DataHUB accepts. One consequence to keep in mind — the `iat` freshness check only
+deters replay to the extent the envelope is authenticated, so if AaaS signs its payloads, verifying that
+signature would be a strict improvement over the shared secret rather than a parallel mechanism.
 
 ## Open
 

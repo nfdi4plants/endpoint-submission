@@ -17,7 +17,7 @@ public static class HookApi
         group.MapPost("/ena", async (
             HookRequest request,
             HttpRequest http,
-            HookAuthenticator auth,
+            IHookAuthenticator auth,
             EnaSubmissionHandler handler,
             CancellationToken ct) =>
         {
@@ -39,7 +39,7 @@ public static class HookApi
         group.MapPost("/workflowhub", async (
             HookRequest request,
             HttpRequest http,
-            HookAuthenticator auth,
+            IHookAuthenticator auth,
             WorkflowHubSubmissionHandler handler,
             CancellationToken ct) =>
         {
@@ -61,7 +61,7 @@ public static class HookApi
         return group;
     }
 
-    private static IResult? Authenticate(HttpRequest request, HookAuthenticator auth)
+    private static IResult? Authenticate(HttpRequest request, IHookAuthenticator auth)
     {
         if (!auth.IsConfigured)
         {

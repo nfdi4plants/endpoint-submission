@@ -29,10 +29,10 @@ public class EndpointSubmissionOptions
     public int HookMaxAgeSeconds { get; set; } = 300;
 
     /// <summary>
-    /// Shared secret the caller must present in X-Hook-Secret. Unset means the hook endpoint
-    /// refuses to serve at all — this endpoint must never be reachable unauthenticated.
-    /// See <see cref="Authentication.HookAuthenticator"/> for what this control does and does
-    /// not protect.
+    /// Shared secret the caller must present in X-Hook-Secret outside Development. Unset means
+    /// the hook endpoint refuses to serve. Development uses a DI-provided bypass authenticator.
+    /// See <see cref="Authentication.SharedSecretHookAuthenticator"/> for what this control does
+    /// and does not protect.
     /// </summary>
     public string? HookSharedSecret { get; set; }
 }
