@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.x.x
+
+      - name: Restore dependencies
+        run: dotnet restore endpoint-submission.slnx
+
+      - name: Build
+        run: dotnet build endpoint-submission.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test endpoint-submission.slnx --configuration Release --no-build
