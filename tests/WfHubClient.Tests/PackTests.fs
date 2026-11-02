@@ -68,6 +68,10 @@ let private statusCases =
       "unnamed component type", Fixtures.unnamedComponentType, [ "MyWorkflow", false; "MyRun", true ]
       "unassigned CWL input", Fixtures.unassignedCwlInput, [ "MyWorkflow", true; "MyRun", false ]
       "mistyped CWL input", Fixtures.mistypedCwlInput, [ "MyWorkflow", true; "MyRun", false ]
+      "optional File input with a valid value", Fixtures.optionalFileInput, [ "MyWorkflow", true; "MyRun", true ]
+      "CWL input with a default and no value", Fixtures.defaultedInput, [ "MyWorkflow", true; "MyRun", true ]
+      "optional CWL input without value or default", Fixtures.optionalUnassignedInput, [ "MyWorkflow", true; "MyRun", true ]
+      "mistyped CWL default", Fixtures.mistypedDefault, [ "MyWorkflow", true; "MyRun", false ]
       "no process table", Fixtures.noProcessTable, [ "MyWorkflow", true; "MyRun", false ]
       "blank input cell", Fixtures.blankInputCell, [ "MyWorkflow", true; "MyRun", false ]
       "no output column", Fixtures.noOutputColumn, [ "MyWorkflow", true; "MyRun", false ]
@@ -430,6 +434,24 @@ let tests =
                     Expect.isNotNull
                         (box (zip.GetEntry "assays/MyAssay/dataset/data.csv"))
                         "expected the referenced assay data file in the zip")
+
+            testCase "a CWL default reaches the run crate as the input value" <| fun () ->
+                let result = packFixture (Fixtures.defaultedInput ())
+
+                withZip (item "MyRun" result) (fun zip ->
+                    use document = JsonDocument.Parse(entryText zip "ro-crate-metadata.json")
+
+                    let hasDefault =
+                        document.RootElement.GetProperty("@graph").EnumerateArray()
+                        |> Seq.exists (fun e ->
+                            let text (name: string) =
+                                match e.TryGetProperty name with
+                                | true, v when v.ValueKind = JsonValueKind.String -> v.GetString()
+                                | _ -> null
+
+                            text "name" = "input_file" && text "value" = "hello")
+
+                    Expect.isTrue hasDefault "expected a PropertyValue input_file with value hello")
 
             testCase "LFS pointer file is included as pointer text" <| fun () ->
                 let result = packFixture (Fixtures.lfsPointerDataFile ())

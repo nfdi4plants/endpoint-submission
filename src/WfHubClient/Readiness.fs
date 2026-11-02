@@ -99,15 +99,19 @@ module Readiness =
     //   ARCtrl 3.2.0 src/ARCtrl/ROCrateIO.fs `ROCrate.writeRunAsCrate`, which rejects an ARC Run
     //   dataset without identifier/name/description/about/mentions/creator/hasPart and a workflow
     //   invocation without name/instrument/result/object.
-    //   ARCtrl 3.2.0 src/ARCtrl/Conversion/Run.fs `RunConversion.composeRun`, which fails on a
-    //   missing CWL description, an untyped input parameter, an input parameter without an assigned
-    //   value and a value whose type does not match the parameter. Untyped parameters are not checked
-    //   separately, for the same reason as for workflows: the CWL decoder rejects them at load time.
+    //   The ARCtrl version with YAMLicious 2.0 (PR #654) src/ARCtrl/Conversion/Run.fs
+    //   `composeWorkflowInvocationFromArcRun`, which fails on a missing CWL description or an untyped
+    //   input parameter. It fails when a required input with no default has no run.yml entry.
+    //   In the run crate a missing or null run.yml value takes the CWL default, and an optional
+    //   input with neither a run.yml entry nor a default is left out. Both input rules below mirror this,
+    //   and the type rule checks run.yml values and substituted defaults with `CWLType.admits`.
+    //   Untyped parameters are not checked separately, for the same reason as for workflows: the CWL
+    //   decoder rejects them at load time.
     //
-    //   ARCtrl 3.2.0 validates only the first workflow invocation of a run, so convertibility
+    //   ARCtrl validates only the first workflow invocation of a run, so convertibility
     //   depends on process table order and a run without process tables never converts. The
     //   process-table check below requires a fully described first process, which is stricter
-    //   than 3.2.0 needs. Revisit when ARCtrl changes this.
+    //   than ARCtrl needs. Revisit when ARCtrl changes this.
     let runRequirements (run: ArcRun) =
         let id = run.Identifier
         [
@@ -155,36 +159,48 @@ module Readiness =
                 | None -> ()
                 | Some pu ->
                     let assigned = run.CWLInput |> Seq.map (fun i -> i.Key) |> Set.ofSeq
-                    CWLProcessingUnit.getInputs pu
+                    CWLProcessingUnit.getInputValues pu
+                    |> Seq.filter (fun i -> not (assigned.Contains i.Name || i.Optional || i.DefaultValue.IsSome))
                     |> Seq.map (fun i -> i.Name)
-                    |> Seq.filter (fun n -> not (assigned.Contains n))
                     |> List.ofSeq
                     |> function
                         | [] -> ()
                         | unassigned ->
-                            fail $"""Run '{id}' assigns no value to the CWL input parameter(s) {String.concat ", " unassigned}. ARCtrl builds the workflow invocation from these values and fails when a parameter has none. Add them to `runs/{id}/run.yml`."""
+                            fail $"""Run '{id}' has no value in `runs/{id}/run.yml` for the required CWL input parameter(s) {String.concat ", " unassigned}, and the CWL declares no default for them. ARCtrl builds the workflow invocation from these values and fails when a required parameter has none. Add the values to `runs/{id}/run.yml` or give the parameters a default in the CWL."""
             )
 
             requirement "Assigned values match the parameter types" (fun () ->
                 match run.CWLDescription with
                 | None -> ()
                 | Some pu ->
-                    let byName =
-                        CWLProcessingUnit.getInputs pu
-                        |> Seq.choose (fun i -> i.Type_ |> Option.map (fun t -> i.Name, t))
-                        |> Map.ofSeq
-                    run.CWLInput
-                    |> Seq.choose (fun inputValue ->
-                        match inputValue.Type, byName.TryFind inputValue.Key with
-                        | Some valueType, Some paramType when not (CWLType.typesEqual valueType paramType) ->
-                            Some $"{inputValue.Key} ({Encode.formatCWLType valueType} vs. {Encode.formatCWLType paramType})"
-                        | _ -> None
+                    let assigned = run.CWLInput |> Seq.map (fun v -> v.Key, v) |> Map.ofSeq
+                    CWLProcessingUnit.getInputValues pu
+                    |> Seq.choose (fun i ->
+                        i.Type_
+                        |> Option.bind (fun paramType ->
+                            // ARCtrl substitutes the default only for a missing or null run.yml value,
+                            // so a run.yml value without an inferable type is not checked at all.
+                            let effectiveType =
+                                match assigned.TryFind i.Name with
+                                | Some v when v.Value.IsSome && v.Value.Value <> CWLParameterValue.Null ->
+                                    v.Type |> Option.map (fun t -> t, "")
+                                | _ ->
+                                    i.DefaultValue
+                                    |> Option.bind (fun d ->
+                                        DecodeParameters.decodeParameterValue d.Node
+                                        |> CWLParameterValue.tryInferType
+                                        |> Option.map (fun t -> t, " from the CWL default"))
+
+                            effectiveType
+                            |> Option.filter (fun (valueType, _) -> not (CWLType.admits paramType valueType))
+                            |> Option.map (fun (valueType, origin) ->
+                                $"{i.Name}{origin} ({Encode.formatCWLType valueType} vs. {Encode.formatCWLType paramType})"))
                     )
                     |> List.ofSeq
                     |> function
                         | [] -> ()
                         | mismatches ->
-                            fail $"""Run '{id}' assigns values whose type does not match the CWL input parameter: {String.concat ", " mismatches}. ARCtrl rejects the conversion on a type mismatch."""
+                            fail $"""Run '{id}' assigns values whose type does not match the CWL input parameter: {String.concat ", " mismatches}. ARCtrl rejects the conversion on such a mismatch."""
             )
 
             requirement "First process table has filled input and output columns" (fun () ->
