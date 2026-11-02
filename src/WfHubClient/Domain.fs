@@ -22,7 +22,7 @@ type PackedItem =
 
 type PackResult =
     { Items: PackedItem list
-      /// None = no LICENSE file present (the crate would carry a placeholder license).
+      /// None = no LICENSE file present. Every item is then NotReady with the license reason.
       License: string option
       /// The SPDX identifier the license text was recognized as, and the only form
       /// WorkflowHub accepts. None means the entry arrives without a license, leaving its

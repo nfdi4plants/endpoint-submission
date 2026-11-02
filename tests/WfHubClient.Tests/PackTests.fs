@@ -72,8 +72,8 @@ let private statusCases =
       "blank input cell", Fixtures.blankInputCell, [ "MyWorkflow", true; "MyRun", false ]
       "no output column", Fixtures.noOutputColumn, [ "MyWorkflow", true; "MyRun", false ]
       "multiple failures", Fixtures.multipleFailuresWorkflow, [ "MyWorkflow", false; "MyRun", true ]
-      "no license", Fixtures.noLicense, [ "MyWorkflow", true; "MyRun", true ]
-      "empty license", Fixtures.emptyLicense, [ "MyWorkflow", true; "MyRun", true ]
+      "no license", Fixtures.noLicense, [ "MyWorkflow", false; "MyRun", false ]
+      "empty license", Fixtures.emptyLicense, [ "MyWorkflow", false; "MyRun", false ]
       "LFS pointer data file", Fixtures.lfsPointerDataFile, [ "MyWorkflow", true; "MyRun", true ]
       "mixed ARC", Fixtures.mixedArc, [ "MyWorkflow", true; "SecondWorkflow", false; "MyRun", true ] ]
 
@@ -157,6 +157,17 @@ let tests =
             match (packFixture (Fixtures.emptyLicense ())).License with
             | Some content -> Expect.equal (content.Trim()) "" "expected empty license content"
             | None -> failtest "expected an empty license to still be surfaced"
+
+        testCase "a missing or empty license makes every item not ready with the license reason" <| fun () ->
+            for fixture, expected in [ Fixtures.noLicense, "no LICENSE file"; Fixtures.emptyLicense, "is empty" ] do
+                let result = packFixture (fixture ())
+                Expect.hasLength result.Items 2 "unexpected item count"
+
+                for packedItem in result.Items do
+                    match packedItem.Status with
+                    | NotReady failures ->
+                        Expect.exists failures (fun m -> m.Contains expected) $"missing license failure for {packedItem.Identifier}"
+                    | other -> failtestf "expected NotReady, got %A" other
 
         testCase "not-ready reasons are the readiness failures" <| fun () ->
             let result = packFixture (Fixtures.multipleFailuresWorkflow ())

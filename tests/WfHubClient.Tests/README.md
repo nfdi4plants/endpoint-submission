@@ -70,6 +70,8 @@ directories. The check is manual. Run it after changing `Requirements.fs`, `Read
    library reports `Uploadable` must pass every one of its test cases in the package run; an
    item reported `NotReady` must fail at least one (the same requirement). The package
    additionally runs the crate-write attempt as a requirement, so a `PackFailed` here also
-   shows up as a package failure, just under that item's crate-write case. License verdicts
-   appear in the package's critical "ARC" list, matching `PackResult.License` and
-   `Readiness.licenseFailures`.
+   shows up as a package failure, just under that item's crate-write case. The license is the
+   exception to the per-item rule. A missing or empty LICENSE makes every item `NotReady` with
+   the `Readiness.licenseFailures` reason, while the package fails its critical "ARC" list and
+   still passes each item's own cases. Its badge count of ready items ignores the license, so
+   it can report items as ready that this library reports `NotReady`.

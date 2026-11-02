@@ -43,8 +43,8 @@ module Pack =
                 |> List.distinct
             | _ -> []
 
-    /// All entry timestamps are fixed and entries are added in ordinal path order, so identical
-    /// inputs produce byte-identical zips.
+    /// Entries are added in ordinal path order with fixed timestamps, so two zips differ only where
+    /// the crate JSON differs. ARCtrl writes wall-clock dates into the crate JSON on every write.
     let private assembleZip (arcDirectory: string) (crateJson: string) (files: string list) =
         let missing =
             files
@@ -131,7 +131,13 @@ module Pack =
                 | Some license, Some identifier ->
                     License(license.Type, license.Content, Licenses.spdxUrl identifier)
                 | Some license, None -> license
+                // No crate is written without a license (see licenseFailures below). This case only
+                // keeps the match total.
                 | None, _ -> License.GetDefaultLicense()
+
+            // The crate must specify a license and the validation package fails the whole ARC
+            // without one, so no item may be uploadable.
+            let licenseFailures = Readiness.licenseFailures arc.License
 
             let workflowItems =
                 arc.Workflows
@@ -142,7 +148,7 @@ module Pack =
                         workflow.Identifier
                         workflow.Title
                         workflow.Description
-                        (Readiness.workflowFailures workflow)
+                        (Readiness.workflowFailures workflow @ licenseFailures)
                         (fun () ->
                             ARCtrl.Json.ARC.ROCrate.writeWorkflowAsCrate (
                                 workflow,
@@ -160,7 +166,7 @@ module Pack =
                         run.Identifier
                         run.Title
                         run.Description
-                        (Readiness.runFailures run)
+                        (Readiness.runFailures run @ licenseFailures)
                         (fun () ->
                             ARCtrl.Json.ARC.ROCrate.writeRunAsCrate (run, arc.FileSystem, crateLicense)))
                 |> List.ofSeq
