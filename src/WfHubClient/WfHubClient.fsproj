@@ -18,6 +18,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="WfHubClient.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="ARCtrl" Version="[3.2.0]" />
   </ItemGroup>
 
