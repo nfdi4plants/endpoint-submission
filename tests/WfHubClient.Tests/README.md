@@ -30,7 +30,7 @@ or the endpoint answers 500.
 ## Parity with the `workflowhub` validation package
 
 The readiness requirements in `src/WfHubClient` are a port of the `workflowhub` ARC
-validation package (`arc-validate-package-registry/StagingArea/workflowhub/workflowhub@0.0.1.fsx`),
+validation package (`arc-validation-package-registry/StagingArea/workflowhub/workflowhub@0.0.1.fsx`),
 and the fixture verdicts asserted here must match what that package reports for the same ARC
 directories. The check is manual. Run it after changing `Requirements.fs`, `Readiness.fs`,
 `FixtureArc.fs`, or the pinned ARCtrl version:
@@ -58,7 +58,7 @@ directories. The check is manual. Run it after changing `Requirements.fs`, `Read
    directory):
 
    ```powershell
-   $fsx = "<path-to>\arc-validate-package-registry\StagingArea\workflowhub\workflowhub@0.0.1.fsx"
+   $fsx = "<path-to>\arc-validation-package-registry\StagingArea\workflowhub\workflowhub@0.0.1.fsx"
    Get-ChildItem "C:\temp\parity\arcs" -Directory | ForEach-Object {
        Push-Location $_.FullName
        dotnet fsi $fsx *> "..\..\logs\$($_.Name).log"
