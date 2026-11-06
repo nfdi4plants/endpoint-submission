@@ -26,6 +26,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ENAClient\ENAClient.fsproj" />
+    <ProjectReference Include="..\DataHubGit\DataHubGit.fsproj" />
+    <ProjectReference Include="..\WfHubClient\WfHubClient.fsproj" />
   </ItemGroup>
 
 </Project>

@@ -44,8 +44,9 @@ let private workflowFailureCases =
 
 /// Same, for fixtures whose mutated run must report exactly one failure.
 let private runFailureCases =
-    [ "unassigned CWL input", Fixtures.unassignedCwlInput, "assigns no value"
+    [ "unassigned CWL input", Fixtures.unassignedCwlInput, "has no value in"
       "mistyped CWL input", Fixtures.mistypedCwlInput, "whose type does not match"
+      "mistyped CWL default", Fixtures.mistypedDefault, "from the CWL default"
       "no process table", Fixtures.noProcessTable, "has no process table"
       "blank input cell", Fixtures.blankInputCell, "empty input cell"
       "no output column", Fixtures.noOutputColumn, "no output column" ]

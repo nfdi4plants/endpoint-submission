@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="GitProcess.fs" />
+    <Compile Include="Checkout.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="DataHubGit.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The same FSharp.Core as WfHubClient, so a project that references both resolves one version
+         and restore does not warn about a downgrade (NU1605). -->
+    <PackageReference Update="FSharp.Core" Version="10.1.302" />
+  </ItemGroup>
+
+</Project>

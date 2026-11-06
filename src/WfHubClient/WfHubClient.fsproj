@@ -13,12 +13,18 @@
     <Compile Include="Requirements.fs" />
     <Compile Include="Readiness.fs" />
     <Compile Include="Pack.fs" />
-    <Compile Include="Checkout.fs" />
     <Compile Include="Client.fs" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="ARCtrl" Version="[3.2.0]" />
+    <InternalsVisibleTo Include="WfHubClient.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ARCtrl" Version="[3.3.0]" />
+    <!-- ARCtrl 3.3.0 needs FSharp.Core 10.1.302 or newer. Older .NET 10 SDK bands bring an older
+         implicit FSharp.Core, and restore then warns about the downgrade (NU1605). -->
+    <PackageReference Update="FSharp.Core" Version="10.1.302" />
   </ItemGroup>
 
 </Project>

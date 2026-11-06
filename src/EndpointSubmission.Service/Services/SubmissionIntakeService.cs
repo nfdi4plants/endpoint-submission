@@ -31,15 +31,20 @@ public class SubmissionIntakeService(
 {
     private readonly EndpointSubmissionOptions _options = options.Value;
 
+    /// <param name="receivedAt">
+    /// When the hook request arrived. A caller that waits before intake, such as for a per-project
+    /// lock, passes it so the wait does not count against the freshness window. It defaults to now.
+    /// </param>
     public async Task<IntakeResult> IntakeAsync(
         HookRequest request,
         string endpoint,
         SubmissionTarget target,
         DateOnly? releaseDate,
-        CancellationToken ct)
+        CancellationToken ct,
+        DateTimeOffset? receivedAt = null)
     {
         // --- Freshness ---------------------------------------------------------
-        var age = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - request.IssuedAt;
+        var age = (receivedAt ?? DateTimeOffset.UtcNow).ToUnixTimeSeconds() - request.IssuedAt;
         if (request.IssuedAt <= 0 || age > _options.HookMaxAgeSeconds || age < -60)
             return new IntakeResult.Unauthorized("Hook payload is stale or not yet valid (iat).");
 

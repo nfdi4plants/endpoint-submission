@@ -225,7 +225,7 @@ module Fixtures =
     /// `Component.create` takes its arguments the same way the constructors elsewhere in this
     /// file do (bare values, omitted for `None`); the type's own constructor is private. An
     /// `OntologyAnnotation` with a term source and accession but no `Name` survives the
-    /// isa.workflow.xlsx round trip still unnamed (verified against ARCtrl 3.2.0).
+    /// isa.workflow.xlsx round trip still unnamed (verified against ARCtrl 3.3.0).
     let unnamedComponentType () =
         let fixture = baseline ()
         let componentType = OntologyAnnotation(tsr = "EDAM", tan = "EDAM:00000000")
@@ -241,11 +241,8 @@ module Fixtures =
         { fixture with
             ExtraFiles = fixture.ExtraFiles |> List.filter (fun (path, _) -> path <> "runs/MyRun/run.yml") }
 
-    /// A plain scalar (e.g. a bare `42`) decodes into a `CWLParameterReference` with a `Value`
-    /// but no `Type` at all, which `Readiness.runRequirements` does not flag as a mismatch since
-    /// it only compares an assigned value's type when one was decoded. `class: Directory` does
-    /// carry a decoded type, and it mismatches the `File` type `run.cwl` declares for
-    /// `input_file`.
+    /// The `class: Directory` value in `run.yml` shows the type Directory, which the `File` input
+    /// `input_file` of `run.cwl` does not admit.
     let mistypedCwlInput () =
         let fixture = baseline ()
 
@@ -257,6 +254,37 @@ module Fixtures =
                         path, "input_file:\n  class: Directory\n  path: ../../assays/MyAssay/dataset\n"
                     else
                         path, content) }
+
+    /// Replaces `run.cwl` and, when `runYml` is `None`, drops `run.yml`.
+    let private withRunInput (cwlType: string) (extraCwl: string) (runYml: string option) =
+        let fixture = baseline ()
+        let cwl = $"cwlVersion: v1.2\nclass: CommandLineTool\nbaseCommand: echo\ninputs:\n  input_file:\n    type: {cwlType}\n{extraCwl}outputs:\n  result:\n    type: File\n    outputBinding:\n      glob: result.csv\n"
+
+        { fixture with
+            ExtraFiles =
+                fixture.ExtraFiles
+                |> List.choose (fun (path, content) ->
+                    match path, runYml with
+                    | "runs/MyRun/run.cwl", _ -> Some(path, cwl)
+                    | "runs/MyRun/run.yml", None -> None
+                    | "runs/MyRun/run.yml", Some yml -> Some(path, yml)
+                    | _ -> Some(path, content)) }
+
+    /// An optional `File?` input with a valid `class: File` value.
+    let optionalFileInput () = withRunInput "File?" "" (Some Cwl.runYml)
+
+    /// An input with a CWL `default:` and no value in `run.yml`.
+    let defaultedInput () = withRunInput "string" "    default: hello\n" None
+
+    /// An optional input with neither a value in `run.yml` nor a default.
+    let optionalUnassignedInput () = withRunInput "File?" "" None
+
+    /// A `File` input whose CWL default is a Directory, with no value in `run.yml`.
+    let mistypedDefault () =
+        withRunInput
+            "File"
+            "    default:\n      class: Directory\n      path: ../../assays/MyAssay/dataset\n"
+            None
 
     let noProcessTable () =
         let fixture = baseline ()

@@ -103,4 +103,7 @@ public class Submission
     public List<SubmissionAttempt> Attempts { get; set; } = [];
     public List<Accession> Accessions { get; set; } = [];
     public List<SubmissionEvent> Events { get; set; } = [];
+
+    /// <summary>What the hook prepared from the ARC. Rows carry file content, so pages project metadata columns instead of loading this list.</summary>
+    public List<PreparedArtifact> PreparedArtifacts { get; set; } = [];
 }
