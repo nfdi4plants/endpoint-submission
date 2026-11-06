@@ -1,0 +1,21 @@
+# Override file for the mock badge test instance. Use it together with the main file, from the
+# repository root:
+#   docker compose -f docker-compose.yml -f testing/mock-badge/docker-compose.mock.yml up -d --build
+# Relative paths below resolve against the directory of the first file (the repository root).
+services:
+
+  mock_badge:
+    container_name: endpoint_submission_mock_badge
+    build:
+      context: testing/mock-badge
+    env_file:
+      - testing/mock-badge/mock.env
+    environment:
+      - ASPNETCORE_HTTP_PORTS=8080
+    ports:
+      # Loopback only. The page can trigger a submission, so it stays off the network.
+      - "127.0.0.1:8082:8080"
+    networks:
+      - endpointsubmission-network
+    depends_on:
+      - endpointsubmissionservice
