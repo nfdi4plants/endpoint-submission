@@ -8,6 +8,8 @@ on:
     paths:
       - src/EndpointSubmission.Service/**
       - src/ENAClient/**
+      - src/DataHubGit/**
+      - src/WfHubClient/**
       - Directory.Build.*
       - Directory.Packages.props
       - NuGet.config
