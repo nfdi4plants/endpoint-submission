@@ -19,7 +19,7 @@ Build once (`dotnet build -c Release`), save this as `check.fsx` in the reposito
 `#r` path resolves relative to the script), and run `dotnet fsi check.fsx`:
 
 ```fsharp
-#r "nuget: ARCtrl, 3.2.0"
+#r "nuget: ARCtrl, 3.3.0"
 #r "src/WfHubClient/bin/Release/net8.0/WfHubClient.dll"
 open WfHubClient
 

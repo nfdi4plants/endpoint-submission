@@ -10,14 +10,14 @@ open WfHubClient.Requirements
 module Readiness =
 
     // Sources:
-    //   ARCtrl 3.2.0 src/ARCtrl/ROCrateIO.fs `ROCrate.writeWorkflowAsCrate`, which rejects an
+    //   ARCtrl 3.3.0 src/ARCtrl/ROCrateIO.fs `ROCrate.writeWorkflowAsCrate`, which rejects an
     //   ARC Workflow dataset without identifier/name/description/mainEntity/hasPart/creator and a
     //   workflow protocol without creator/name/input/output/programmingLanguage/url/version/dateCreated.
     //   Of those, only the ones checked below can actually be missing: identifier, mainEntity, hasPart,
     //   programmingLanguage and dateCreated are always populated during composition, and `input`/
     //   `output` are always set even when the CWL declares none, so an empty input or output list is
-    //   accepted (verified by running ARCtrl 3.2.0).
-    //   ARCtrl 3.2.0 src/ARCtrl/Conversion/Workflow.fs `WorkflowConversion.composeWorkflow`, which
+    //   accepted (verified by running ARCtrl 3.3.0).
+    //   ARCtrl 3.3.0 src/ARCtrl/Conversion/Workflow.fs `WorkflowConversion.composeWorkflow`, which
     //   fails on a missing CWL description, untyped inputs/outputs and untyped components. Untyped
     //   inputs/outputs are not checked separately: the CWL decoder already rejects a parameter without
     //   a valid type, so such an ARC fails to load and is reported as an ARC load error instead.
@@ -96,10 +96,10 @@ module Readiness =
         ]
 
     // Sources:
-    //   ARCtrl 3.2.0 src/ARCtrl/ROCrateIO.fs `ROCrate.writeRunAsCrate`, which rejects an ARC Run
+    //   ARCtrl 3.3.0 src/ARCtrl/ROCrateIO.fs `ROCrate.writeRunAsCrate`, which rejects an ARC Run
     //   dataset without identifier/name/description/about/mentions/creator/hasPart and a workflow
     //   invocation without name/instrument/result/object.
-    //   The ARCtrl version with YAMLicious 2.0 (PR #654) src/ARCtrl/Conversion/Run.fs
+    //   ARCtrl 3.3.0 src/ARCtrl/Conversion/Run.fs
     //   `composeWorkflowInvocationFromArcRun`, which fails on a missing CWL description or an untyped
     //   input parameter. It fails when a required input with no default has no run.yml entry.
     //   In the run crate a missing or null run.yml value takes the CWL default, and an optional

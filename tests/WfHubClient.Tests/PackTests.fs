@@ -462,8 +462,8 @@ let tests =
                         lfsPointerText
                         "expected the raw pointer text")
 
-            // ARCtrl stamps dates at every write (3.2.0 stamps `dateCreated`, and ARCtrl PR #654
-            // adds `datePublished`), so full byte-identity across packs is out of the library's hands.
+            // ARCtrl 3.3.0 stamps `dateCreated` and `datePublished` at every write unless a timestamp
+            // is passed, and Pack passes none, so full byte-identity across packs is out of reach here.
             // Everything the assembly controls must be identical: entry set, ordering, timestamps,
             // compression and file contents. The metadata may differ only in those stamps.
             testCase "packing the same directory twice is identical except ARCtrl's date stamps" <| fun () ->

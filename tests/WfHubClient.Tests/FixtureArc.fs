@@ -225,7 +225,7 @@ module Fixtures =
     /// `Component.create` takes its arguments the same way the constructors elsewhere in this
     /// file do (bare values, omitted for `None`); the type's own constructor is private. An
     /// `OntologyAnnotation` with a term source and accession but no `Name` survives the
-    /// isa.workflow.xlsx round trip still unnamed (verified against ARCtrl 3.2.0).
+    /// isa.workflow.xlsx round trip still unnamed (verified against ARCtrl 3.3.0).
     let unnamedComponentType () =
         let fixture = baseline ()
         let componentType = OntologyAnnotation(tsr = "EDAM", tan = "EDAM:00000000")
