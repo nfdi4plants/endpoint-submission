@@ -6,11 +6,13 @@
 # The !override tag makes Compose replace the ports of the main file, because a plain list would
 # merge with them and keep the public binding. It needs Docker Compose 2.24 or later. The mock
 # badge already binds 127.0.0.1:8082 in its own file.
+# The service publishes its https port (8443, see the mock file) on 8081. Use this file on the local
+# machine too, because it is the only place that maps 8081 to the https port.
 services:
 
   endpointsubmissionservice:
     ports: !override
-      - "127.0.0.1:8081:8080"
+      - "127.0.0.1:8081:8443"
 
   submission_db:
     ports: !override

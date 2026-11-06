@@ -6,6 +6,7 @@ using EndpointSubmission.Service.Endpoints.WorkflowHub;
 using EndpointSubmission.Service.Pages;
 using EndpointSubmission.Service.Services;
 using HealthChecks.UI.Client;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -33,6 +34,11 @@ builder.Services.AddOptions<WorkflowHubOptions>()
 
 builder.Services.AddSingleton<KeyedAsyncLock>();
 
+// The WorkflowHub login cookie is protected with an in-memory key ring. Nothing reaches the disk,
+// and a restart invalidates the logins that are in progress.
+builder.Services.AddSingleton<IDataProtectionProvider>(new EphemeralDataProtectionProvider());
+builder.Services.AddSingleton<WorkflowHubFlowCookie>();
+
 var connectionString = builder.Configuration.GetValue<string>("PostgresConnectionString");
 builder.Services.AddDbContext<SubmissionDbContext>(options => options.UseNpgsql(connectionString));
 
@@ -41,6 +47,11 @@ builder.Services.AddSingleton<IArcMetadataReader, ArcMetadataReader>();
 
 // Checks the ARC out with git and packs the crates, with the PAT of the hook request.
 builder.Services.AddSingleton<IWorkflowCratePacker, WfHubCratePacker>();
+
+// Talks to WorkflowHub with the OAuth access token of one request.
+builder.Services.AddSingleton<IWorkflowHubGateway, WfHubGateway>();
+
+builder.Services.AddScoped<WorkflowHubUploadService>();
 
 builder.Services.AddScoped<SubmissionIntakeService>();
 builder.Services.AddScoped<SubmissionPageAccess>();

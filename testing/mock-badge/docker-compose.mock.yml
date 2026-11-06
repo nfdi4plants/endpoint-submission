@@ -1,8 +1,19 @@
-# Override file for the mock badge test instance. Use it together with the main file, from the
-# repository root:
-#   docker compose -f docker-compose.yml -f testing/mock-badge/docker-compose.mock.yml up -d --build
+# Override file for the mock badge test instance. Use it together with the main file and the VM
+# file, from the repository root (the VM file publishes the https port of the service):
+#   docker compose -f docker-compose.yml -f testing/mock-badge/docker-compose.mock.yml -f testing/mock-badge/docker-compose.vm.yml up -d --build
 # Relative paths below resolve against the directory of the first file (the repository root).
 services:
+
+  endpointsubmissionservice:
+    environment:
+      # WorkflowHub accepts only https redirect URIs, so the service also listens on https. Port
+      # 8080 stays open for the hook call of the mock inside the compose network.
+      - ASPNETCORE_HTTPS_PORTS=8443
+      - ASPNETCORE_Kestrel__Certificates__Default__Path=/https/localhost.crt
+      - ASPNETCORE_Kestrel__Certificates__Default__KeyPath=/https/localhost.key
+    volumes:
+      # PEM certificate and key, see testing/mock-badge/README.md. The folder is git-ignored.
+      - ./testing/mock-badge/certs:/https:ro
 
   mock_badge:
     container_name: endpoint_submission_mock_badge

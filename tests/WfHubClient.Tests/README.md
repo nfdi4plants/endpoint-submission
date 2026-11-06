@@ -7,7 +7,7 @@ manual, opt-in step. They stay skipped unless all three environment variables ar
 
 ```powershell
 $env:WFHUB_BASE_URL = "https://dev.workflowhub.eu"   # a sandbox instance, never production
-$env:WFHUB_TOKEN    = "<api token>"
+$env:WFHUB_TOKEN    = "<oauth access token>"
 $env:WFHUB_TEAM_ID  = "<numeric project id>"
 dotnet test tests/WfHubClient.Tests
 ```
@@ -21,11 +21,11 @@ has no delete). Besides exercising the client end to end it verifies the respons
 assumptions the offline stub tests encode (`/people/current` relationships, `/projects/{id}`
 titles, upload response fields).
 
-`WFHUB_TOKEN` is an OAuth Bearer token. On an instance whose login form is behind a bot
-challenge, register a confidential OAuth application (`urn:ietf:wg:oauth:2.0:oob`, scopes
-`read write`) from the authenticated pages and run the authorization code grant against
-`/oauth/authorize` and `/oauth/token`; send `Accept: application/json` on the token request,
-or the endpoint answers 500.
+`WFHUB_TOKEN` is an OAuth access token from that instance with the scopes `read write`. The
+client sends it as `Authorization: Bearer <token>`. Register an OAuth application on your
+WorkflowHub profile under Actions, API Applications, run the authorization code flow once by hand
+and copy the access token from the token answer. WorkflowHub access tokens expire after about
+two hours, so fetch a fresh one for each manual run.
 
 ## Checkout tests
 

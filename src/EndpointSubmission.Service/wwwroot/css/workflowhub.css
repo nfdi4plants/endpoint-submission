@@ -1,0 +1,422 @@
+/*
+ * WorkflowHub preview and upload pages.
+ * Builds on Pico CSS and reads its variables, so the light and dark themes both work.
+ * Every rule sits under .wfh, which the page shell puts around the content.
+ */
+
+/* Pico has no warning color. Light and dark values follow Pico's own theme selectors. */
+:root:not([data-theme="dark"]) { --wfh-warning: #9a5b00; }
+:root[data-theme="dark"] { --wfh-warning: #e2a93b; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) { --wfh-warning: #e2a93b; }
+}
+
+/*
+ * Pico's muted color has a contrast ratio below 4.5:1 on the count pills in both themes. This
+ * text color reaches 5.2:1 or more on the pills. Same theme selectors as above.
+ */
+:root:not([data-theme="dark"]) { --wfh-muted-text: #565d6a; }
+:root[data-theme="dark"] { --wfh-muted-text: #9098a8; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) { --wfh-muted-text: #9098a8; }
+}
+
+.wfh {
+  max-width: 56rem;
+  margin-inline: auto;
+  /* A long identifier, URL, commit SHA or reason text breaks at any character and stays inside the page width. */
+  overflow-wrap: anywhere;
+}
+
+/* An element with this class is hidden on screen. Screen readers still read it. */
+.wfh-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.wfh [hidden] { display: none !important; }
+.wfh-muted { color: var(--pico-muted-color); }
+
+.wfh h1 { font-size: 1.75rem; }
+.wfh h2 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  font-size: 1.25rem;
+}
+.wfh h3 { margin: 0 0 0.25rem; font-size: 1rem; }
+
+.wfh article {
+  margin-bottom: var(--pico-spacing);
+  padding: var(--pico-spacing) calc(var(--pico-spacing) * 1.25);
+  border: 1px solid var(--pico-muted-border-color);
+}
+
+.wfh-section { margin-bottom: calc(var(--pico-spacing) * 1.5); }
+
+.wfh-count {
+  padding: 0 0.5rem;
+  border-radius: 999px;
+  background: var(--pico-muted-border-color);
+  color: var(--wfh-muted-text);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+/* Badges */
+
+.wfh-badge {
+  --tone: var(--pico-secondary);
+  display: inline-block;
+  padding: 0 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--tone) 55%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--tone) 14%, var(--pico-card-background-color));
+  color: var(--pico-color);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.5;
+  vertical-align: 0.1em;
+  white-space: nowrap;
+}
+.wfh-badge-workflow { --tone: var(--pico-primary); }
+.wfh-badge-run { --tone: var(--pico-secondary); }
+.wfh-badge-production,
+.wfh-badge-warning,
+.wfh-badge-level-warning { --tone: var(--wfh-warning); }
+.wfh-badge-level-error { --tone: var(--pico-del-color); }
+
+/* Notices and the result banner */
+
+.wfh-notice {
+  --tone: var(--pico-primary);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 0.75rem;
+  margin: 0 0 var(--pico-spacing);
+  padding: 0.75rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--tone) 50%, transparent);
+  border-inline-start: 0.3rem solid var(--tone);
+  border-radius: var(--pico-border-radius);
+  background: color-mix(in srgb, var(--tone) 12%, var(--pico-card-background-color));
+  color: var(--pico-color);
+}
+/*
+ * Each icon has an empty alternative text, so screen readers skip it. A browser without that
+ * syntax drops the second declaration and keeps the first.
+ */
+.wfh-notice::before {
+  content: "i";
+  content: "i" / "";
+  grid-row: 1 / span 20;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 50%;
+  background: var(--tone);
+  color: var(--pico-card-background-color);
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.wfh-notice > p { grid-column: 2; margin: 0; }
+.wfh-notice > p + p { margin-top: 0.4rem; }
+.wfh-notice-success { --tone: var(--pico-ins-color); }
+.wfh-notice-success::before { content: "\2713"; content: "\2713" / ""; }
+.wfh-notice-warning { --tone: var(--wfh-warning); }
+.wfh-notice-warning::before { content: "!"; content: "!" / ""; }
+.wfh-notice-error { --tone: var(--pico-del-color); }
+.wfh-notice-error::before { content: "\00d7"; content: "\00d7" / ""; font-size: 1.1rem; }
+
+/* Summary card */
+
+.wfh-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: var(--pico-spacing) calc(var(--pico-spacing) * 1.5);
+  margin: 0;
+}
+.wfh-fact { min-width: 0; }
+.wfh-fact dt {
+  margin: 0 0 0.15rem;
+  color: var(--pico-muted-color);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.wfh-fact dd { margin: 0; }
+.wfh-fact-wide { grid-column: 1 / -1; }
+.wfh-fact-warning {
+  --tone: var(--wfh-warning);
+  padding: 0.5rem 0.75rem;
+  border-inline-start: 0.3rem solid var(--tone);
+  border-radius: var(--pico-border-radius);
+  background: color-mix(in srgb, var(--tone) 12%, var(--pico-card-background-color));
+}
+
+/* Item lists */
+
+.wfh-list {
+  margin: 0 0 var(--pico-spacing);
+  padding: 0;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+  background: var(--pico-card-background-color);
+  list-style: none;
+}
+.wfh-list > li,
+.wfh-list > details {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--pico-muted-border-color);
+  list-style: none;
+}
+.wfh-list > :first-child { border-top: 0; }
+
+.wfh-name { display: block; }
+.wfh-name strong { font-weight: 600; }
+.wfh-id {
+  display: block;
+  margin: 0.15rem 0 0;
+  color: var(--pico-muted-color);
+  font-family: var(--pico-font-family-monospace);
+  font-size: 0.8125rem;
+}
+
+.wfh-item-ready,
+.wfh-item-uploaded {
+  display: grid;
+  gap: 0.5rem 1rem;
+  align-items: center;
+}
+.wfh-item-ready { grid-template-columns: minmax(0, 1fr) 5rem 10rem; }
+.wfh-item-uploaded { grid-template-columns: minmax(0, 1fr) auto auto; }
+
+.wfh-pick {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: start;
+}
+.wfh-pick input[type="checkbox"] { margin: 0.15rem 0 0; }
+.wfh-pick label {
+  width: auto;
+  margin: 0;
+  font-weight: 400;
+  cursor: pointer;
+}
+.wfh-item-uploaded .wfh-pick { display: block; }
+
+/* Ready items listed without a form: no checkbox and no visibility select. */
+.wfh-item-readonly { grid-template-columns: minmax(0, 1fr) 5rem; }
+.wfh-item-readonly .wfh-pick { display: block; }
+
+/* A ready item that an earlier upload may have created on WorkflowHub. */
+.wfh-item-caution {
+  --tone: var(--wfh-warning);
+  box-shadow: inset 0.3rem 0 0 var(--tone);
+  background: color-mix(in srgb, var(--tone) 8%, var(--pico-card-background-color));
+}
+.wfh-item-warning {
+  grid-column: 2;
+  margin: 0.35rem 0 0;
+  font-size: 0.875rem;
+}
+.wfh-item-uploaded .wfh-item-warning,
+.wfh-item-readonly .wfh-item-warning { grid-column: auto; }
+
+.wfh-size,
+.wfh-entry {
+  color: var(--pico-muted-color);
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.wfh-size { text-align: end; }
+
+.wfh-visibility label {
+  margin: 0 0 0.15rem;
+  color: var(--pico-muted-color);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.wfh-visibility select {
+  width: 100%;
+  min-width: 9rem;
+  margin: 0;
+}
+
+.wfh-select-all {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.wfh-select-all input { margin: 0; }
+
+/* Items that are not ready */
+
+/* Pico dims the summary of an open details. These rules keep the normal text color. */
+.wfh details > summary:not([role]),
+.wfh details[open] > summary:not([role]):not(:focus) { color: var(--pico-color); }
+
+.wfh-item-blocked > summary { line-height: 1.5; }
+.wfh-item-blocked > summary strong { font-weight: 600; }
+.wfh-item-blocked > summary::after { margin-top: 0.25rem; }
+.wfh-item-blocked[open] > summary { margin-bottom: 0.5rem; }
+.wfh-item-blocked .wfh-id { margin-bottom: 0.5rem; }
+.wfh-item-blocked ul {
+  margin: 0;
+  padding-inline-start: 1.25rem;
+  font-size: 0.9rem;
+}
+.wfh-item-blocked li { margin-bottom: 0.35rem; list-style: disc; }
+
+/* Upload panel */
+
+.wfh-upload h2 { margin-bottom: var(--pico-spacing); }
+.wfh-teams { margin-top: var(--pico-spacing); }
+.wfh-teams label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: start;
+  width: auto;
+  font-weight: 400;
+}
+.wfh-teams input[type="radio"] { margin: 0.15rem 0 0; }
+
+.wfh-notes {
+  margin: 0 0 var(--pico-spacing);
+  padding-inline-start: 1.25rem;
+  font-size: 0.875rem;
+}
+.wfh-notes li { margin-bottom: 0.25rem; }
+
+.wfh-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1rem;
+}
+.wfh-actions button,
+.wfh-actions [role="button"] {
+  width: auto;
+  margin: 0;
+  white-space: normal;
+}
+.wfh-inline-error { color: var(--pico-del-color); font-weight: 600; }
+
+/* Activity */
+
+.wfh-activity details {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+  background: var(--pico-card-background-color);
+}
+.wfh-activity summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+.wfh-activity summary::after { margin-inline-start: auto; }
+.wfh-activity details[open] > summary { margin-bottom: 0.5rem; }
+.wfh-events { margin: 0; padding: 0; list-style: none; }
+.wfh-event {
+  display: grid;
+  grid-template-columns: 15rem minmax(0, 1fr);
+  gap: 0.25rem 1rem;
+  margin: 0;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--pico-muted-border-color);
+  font-size: 0.875rem;
+  list-style: none;
+}
+.wfh-event-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.wfh-event-meta time {
+  color: var(--pico-muted-color);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Message pages for upload outcomes that have no stored rows to show. */
+
+.wfh-message { --tone: var(--pico-del-color); }
+.wfh article.wfh-message {
+  max-width: 40rem;
+  margin: 2rem auto;
+  border-inline-start: 0.3rem solid var(--tone);
+}
+.wfh-message-warning { --tone: var(--wfh-warning); }
+.wfh-message-info { --tone: var(--pico-primary); }
+.wfh-message h1 { margin-bottom: var(--pico-spacing); font-size: 1.5rem; }
+.wfh-message p { margin-bottom: var(--pico-spacing); }
+.wfh-message > :last-child { margin-bottom: 0; }
+
+/* Narrow screens: rows stack and the summary becomes label and value pairs. */
+
+@media (max-width: 575.98px) {
+  .wfh h1 { font-size: 1.5rem; }
+
+  .wfh article { padding: var(--pico-spacing); }
+
+  .wfh-facts { grid-template-columns: minmax(0, 1fr); gap: 0.5rem; }
+  .wfh-fact {
+    display: grid;
+    grid-template-columns: 6.5rem minmax(0, 1fr);
+    gap: 0.5rem;
+    align-items: baseline;
+  }
+  .wfh-fact dt { margin: 0; }
+  .wfh-fact-warning { display: block; }
+  .wfh-fact-warning dt { margin-bottom: 0.15rem; }
+
+  .wfh-list > li,
+  .wfh-list > details { padding: 0.75rem; }
+
+  .wfh-item-ready { grid-template-columns: auto minmax(0, 1fr); }
+  .wfh-item-ready .wfh-pick { grid-column: 1 / -1; }
+  .wfh-size { padding-inline-start: 2rem; text-align: start; }
+  .wfh-item-readonly { grid-template-columns: minmax(0, 1fr); }
+  .wfh-item-readonly .wfh-size { padding-inline-start: 0; }
+  .wfh-visibility {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+  }
+  .wfh-visibility label { margin: 0; }
+  .wfh-visibility select { width: auto; }
+
+  .wfh-item-uploaded { grid-template-columns: auto minmax(0, 1fr); }
+  .wfh-item-uploaded .wfh-pick { grid-column: 1 / -1; }
+  .wfh-entry { padding-inline-start: 0; }
+
+  .wfh-event { grid-template-columns: minmax(0, 1fr); }
+  .wfh-actions button,
+  .wfh-actions [role="button"] { width: 100%; }
+}

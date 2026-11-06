@@ -16,6 +16,7 @@ let private env name =
 
 /// All three set ⇒ the live tests run against that instance; otherwise they are skipped.
 /// Point WFHUB_BASE_URL at a sandbox (e.g. https://dev.workflowhub.eu), never production.
+/// WFHUB_TOKEN is an OAuth access token of that instance with the read and write scopes.
 let private settings =
     match env "WFHUB_BASE_URL", env "WFHUB_TOKEN", env "WFHUB_TEAM_ID" with
     | Some baseUrl, Some token, Some teamId -> Some(baseUrl, token, int teamId)

@@ -431,3 +431,4 @@ FodyWeavers.xsd
 # Local Docker Compose configuration. Commit .env.example instead.
 .env
 testing/mock-badge/mock.env
+testing/mock-badge/certs/

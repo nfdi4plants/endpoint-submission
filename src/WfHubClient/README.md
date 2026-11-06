@@ -86,13 +86,33 @@ set one on WorkflowHub afterwards.
 
 ## Uploading
 
-`Client` talks to a WorkflowHub instance with a short-lived bearer token the caller supplies:
+`Client` talks to a WorkflowHub instance with the user's OAuth access token, which the caller
+supplies and the client sends as `Authorization: Bearer`:
 `getCurrentPerson` / `listTeams` for the team picker, `uploadCrate` (multipart POST, then a
 policy PATCH that applies the chosen visibility; note the entry is briefly world-readable
 between the two calls), `setVisibility` as the recovery call when that PATCH failed, and
 `createVersion` for adding a version to an existing entry. The base URL is always an explicit
 parameter. Pass `https://dev.workflowhub.eu` to rehearse against the sandbox; nothing defaults
 to production. The client never deletes or overwrites, and tokens are never stored or logged.
+
+### Getting an access token
+
+WorkflowHub (SEEK) runs Doorkeeper with the authorization code grant and the scopes `read` and
+`write`. Uploading needs both. The service registers a public client, so no client secret exists
+and PKCE S256 proves possession of the code.
+
+1. Send the user to `WorkflowHubApi.authorizeUrl(baseUrl, clientId, redirectUri, state, codeChallenge)`.
+   The user logs in and confirms. A public client sees the confirmation page every time.
+2. WorkflowHub redirects to `redirectUri` with `code` and `state`. The caller checks `state`.
+3. `Client.exchangeAuthorizationCode(baseUrl, clientId, code, redirectUri, codeVerifier)` returns the
+   access token. A refusal is a `Rejected` error whose detail holds only the OAuth `error` and
+   `error_description` fields. An answer without `access_token` is a `Transport` error.
+4. Use the token for `listTeams` and `uploadCrate`, then call
+   `Client.revokeToken(baseUrl, clientId, token)` (RFC 7009) to end it.
+
+WorkflowHub's token endpoint answers 500 unless the request sends `Accept: application/json`, so both
+OAuth calls send it. The crate POST sends no `Accept` header, because SEEK then rejects the
+multipart body.
 
 ## Layout
 
@@ -101,7 +121,7 @@ ARCtrl only:
 
 | Files | Contents |
 |---|---|
-| `Domain.fs`, `Api.fs`, `Protocol.fs`, `Licenses.fs`, `Requirements.fs`, `Readiness.fs` | readiness requirements, JSONAPI parsing and shaping, WorkflowHub API and OAuth constants; no I/O |
+| `Domain.fs`, `Api.fs`, `Protocol.fs`, `Licenses.fs`, `Requirements.fs`, `Readiness.fs` | Readiness requirements, JSONAPI parsing and shaping, WorkflowHub API constants. No I/O |
 | `Pack.fs` | the `pack` pipeline (crate write plus zip assembly, with the LFS pointer guard) |
 | `Client.fs` | the WorkflowHub HTTP client |
 
