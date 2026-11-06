@@ -96,6 +96,64 @@ namespace EndpointSubmission.Service.Migrations
                     b.ToTable("Notifications");
                 });
 
+            modelBuilder.Entity("EndpointSubmission.Service.Models.PreparedArtifact", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<byte[]>("Content")
+                        .HasColumnType("bytea");
+
+                    b.Property<string>("ContentSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("text");
+
+                    b.Property<string>("FailureReasonsJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("ItemIdentifier")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("ItemKind")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("MetadataJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<long?>("SizeBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("SubmissionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Title")
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SubmissionId", "ItemKind", "ItemIdentifier")
+                        .IsUnique();
+
+                    b.ToTable("PreparedArtifacts");
+                });
+
             modelBuilder.Entity("EndpointSubmission.Service.Models.Submission", b =>
                 {
                     b.Property<Guid>("Id")
@@ -315,6 +373,17 @@ namespace EndpointSubmission.Service.Migrations
                     b.Navigation("Submission");
                 });
 
+            modelBuilder.Entity("EndpointSubmission.Service.Models.PreparedArtifact", b =>
+                {
+                    b.HasOne("EndpointSubmission.Service.Models.Submission", "Submission")
+                        .WithMany("PreparedArtifacts")
+                        .HasForeignKey("SubmissionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Submission");
+                });
+
             modelBuilder.Entity("EndpointSubmission.Service.Models.SubmissionAttempt", b =>
                 {
                     b.HasOne("EndpointSubmission.Service.Models.Submission", "Submission")
@@ -366,6 +435,8 @@ namespace EndpointSubmission.Service.Migrations
                     b.Navigation("Attempts");
 
                     b.Navigation("Events");
+
+                    b.Navigation("PreparedArtifacts");
                 });
 
             modelBuilder.Entity("EndpointSubmission.Service.Models.SubmissionAttempt", b =>

@@ -87,6 +87,13 @@ The WorkflowHub contract is intentionally minimal until its useful preview field
 | `contract_version` | `1` | Anything other than `1` is rejected. |
 | `target` | `"sandbox"` | `"sandbox"` or `"production"`; production also requires deployment opt-in. |
 
+The WorkflowHub hook checks the ARC out and packs the crates inside the request. The response arrives after
+that work. `WorkflowHub__PreparationTimeoutSeconds` (default 180) limits the checkout, and packing then
+runs to the end (usually seconds), so the hook can answer somewhat later than that limit. Callers and
+proxies need a request timeout longer than that. A preparation that fails or times out
+still answers 200, and the preview page shows the failure. A second click for the same project waits for
+the running one and then receives its own fresh `follow_me` link.
+
 ## Behaviour worth knowing
 
 **The token is passed through the endpoint handler, used immediately, and then discarded.** All common

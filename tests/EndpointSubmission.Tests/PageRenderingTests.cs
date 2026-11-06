@@ -111,7 +111,7 @@ public class PageRenderingTests
             await EnaPreviewHandlers.Render(ena.Id, enaToken.Token, access, default));
         var workflowHubResult = Assert.IsType<ContentHttpResult>(
             await WorkflowHubPreviewHandlers.Render(
-                workflowHub.Id, workflowHubToken.Token, access, default));
+                workflowHub.Id, workflowHubToken.Token, access, db, default));
 
         Assert.Contains("ENA submission preview", enaResult.ResponseContent);
         Assert.Contains("&lt;script&gt;ena arc&lt;/script&gt;", enaResult.ResponseContent);
@@ -134,7 +134,185 @@ public class PageRenderingTests
         Assert.IsType<NotFound>(
             await EnaPreviewHandlers.Render(submission.Id, "wrong", access, default));
         Assert.IsType<NotFound>(
-            await WorkflowHubPreviewHandlers.Render(submission.Id, minted.Token, access, default));
+            await WorkflowHubPreviewHandlers.Render(submission.Id, minted.Token, access, db, default));
+    }
+
+    private const string LicenseMit = """{"licenseSpdxId":"MIT","licensePresent":true}""";
+
+    private static PreparedArtifact Artifact(
+        Submission submission, string kind, string identifier, PreparedArtifactStatus status,
+        string? title = null, string[]? failures = null, string metadata = LicenseMit) => new()
+    {
+        SubmissionId = submission.Id,
+        ItemKind = kind,
+        ItemIdentifier = identifier,
+        Title = title,
+        Status = status,
+        FailureReasonsJson = JsonSerializer.Serialize(failures ?? []),
+        MetadataJson = metadata,
+        SizeBytes = status == PreparedArtifactStatus.Ready ? 2048 : null,
+        Content = status == PreparedArtifactStatus.Ready ? [1, 2, 3] : null
+    };
+
+    /// <summary>Seeds a WorkflowHub submission with the given artifacts and renders its preview page.</summary>
+    private static async Task<(string Html, PreparedArtifact[] Artifacts, string Token)> RenderWorkflowHub(
+        Func<Submission, PreparedArtifact[]> build,
+        Action<SubmissionDbContext, Submission>? seed = null,
+        SubmissionTarget target = SubmissionTarget.Sandbox)
+    {
+        var db = new SubmissionDbContext(new DbContextOptionsBuilder<SubmissionDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options);
+        var tokens = new StatusTokenService();
+        var minted = tokens.Mint();
+        var submission = Submission("workflowhub", "arc", minted.Hash);
+        submission.Target = target;
+        db.Submissions.Add(submission);
+        var artifacts = build(submission);
+        db.PreparedArtifacts.AddRange(artifacts);
+        seed?.Invoke(db, submission);
+        await db.SaveChangesAsync();
+
+        var result = Assert.IsType<ContentHttpResult>(await WorkflowHubPreviewHandlers.Render(
+            submission.Id, minted.Token, new SubmissionPageAccess(db, tokens), db, default));
+        return (result.ResponseContent!, artifacts, minted.Token);
+    }
+
+    /// <summary>The table row that contains <paramref name="marker"/>.</summary>
+    private static string RowWith(string html, string marker)
+    {
+        var row = Assert.Single(html.Split("<tr").Where(r => r.Contains(marker)));
+        return row[..row.IndexOf("</tr>", StringComparison.Ordinal)];
+    }
+
+    [Fact]
+    public async Task WorkflowHub_preview_offers_a_checkbox_and_private_visibility_for_a_ready_item()
+    {
+        var (html, artifacts, token) = await RenderWorkflowHub(s =>
+            [Artifact(s, "workflow", "workflows/align", PreparedArtifactStatus.Ready, title: "Align reads")]);
+
+        var id = artifacts[0].Id;
+        var row = RowWith(html, "workflows/align");
+        Assert.Contains($"""<input type="checkbox" name="item" value="{id}">""", row);
+        Assert.Contains($"""<select name="visibility-{id}">""", row);
+        Assert.Contains("""<option value="private" selected>Private</option>""", row);
+        Assert.Contains("""<option value="public">Public</option>""", row);
+        Assert.Contains("Align reads", row);
+        Assert.Contains("2.0 KB", row);
+
+        Assert.Contains(@"method=""post"" action=""/workflowhub/submissions/", html);
+        Assert.Contains("/authorize\"", html);
+        Assert.Contains($"""<input type="hidden" name="t" value="{token}">""", html);
+        Assert.Contains("License: MIT. WorkflowHub shows it on every entry.", html);
+        Assert.Contains("dev.workflowhub.eu", html);
+        Assert.DoesNotContain("""<button type="submit" disabled>""", html);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_preview_greys_out_items_that_are_not_ready_or_failed_to_pack()
+    {
+        var (html, _, _) = await RenderWorkflowHub(s =>
+        [
+            Artifact(s, "run", "runs/r1", PreparedArtifactStatus.NotReady, failures: ["The run has no outputs."]),
+            Artifact(s, "run", "runs/r2", PreparedArtifactStatus.PreparationFailed, failures: ["Zip assembly failed."])
+        ]);
+
+        var notReady = RowWith(html, "runs/r1");
+        var failed = RowWith(html, "runs/r2");
+        Assert.All(new[] { notReady, failed }, row =>
+        {
+            Assert.Contains(@"aria-disabled=""true""", row);
+            Assert.Contains(@"<input type=""checkbox"" disabled", row);
+            Assert.DoesNotContain(@"name=""item""", row);
+        });
+        Assert.Contains("<li>The run has no outputs.</li>", notReady);
+        Assert.Contains("<li>Zip assembly failed.</li>", failed);
+        Assert.Contains("""<button type="submit" disabled>""", html);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_preview_escapes_identifiers_and_failure_texts()
+    {
+        var (html, _, _) = await RenderWorkflowHub(s =>
+        [
+            Artifact(s, "run", "<script>id()</script>", PreparedArtifactStatus.NotReady,
+                failures: ["<script>fail()</script>"])
+        ]);
+
+        Assert.DoesNotContain("<script>", html);
+        Assert.Contains("&lt;script&gt;id()&lt;/script&gt;", html);
+        Assert.Contains("&lt;script&gt;fail()&lt;/script&gt;", html);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_preview_explains_team_membership_and_the_public_moment()
+    {
+        var (html, _, _) = await RenderWorkflowHub(s =>
+            [Artifact(s, "workflow", "workflows/align", PreparedArtifactStatus.Ready)]);
+
+        Assert.Contains(
+            "Uploading requires membership in a WorkflowHub team. You log in on WorkflowHub with your own account and confirm the upload there.",
+            html);
+        Assert.Contains(
+            "WorkflowHub makes a new entry public for a moment before the service switches it to private.", html);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_preview_shows_the_preparation_failure_when_there_are_no_artifacts()
+    {
+        const string message = "Crate preparation is not available in this deployment yet.";
+        var (html, _, _) = await RenderWorkflowHub(_ => [], (db, s) => db.SubmissionEvents.Add(new SubmissionEvent
+        {
+            SubmissionId = s.Id,
+            Step = "preparation.failed",
+            Level = SubmissionEventLevel.Error,
+            Message = message
+        }));
+
+        var notice = html[html.IndexOf("<article", StringComparison.Ordinal)..html.IndexOf("</article>", StringComparison.Ordinal)];
+        Assert.Contains(message, notice);
+        Assert.Contains("Click the badge in the DataHUB again to retry.", notice);
+        Assert.Contains("""<button type="submit" disabled>""", html);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_preview_says_so_and_offers_no_upload_when_the_commit_has_no_items()
+    {
+        var (html, _, _) = await RenderWorkflowHub(_ => [], (db, s) => db.SubmissionEvents.Add(new SubmissionEvent
+        {
+            SubmissionId = s.Id,
+            Step = "preparation.completed",
+            Message = "Prepared 0 WorkflowHub items: no workflows or runs were found in this commit."
+        }));
+
+        Assert.Contains("No workflows or runs were found in this ARC commit, so there is nothing to upload.", html);
+        Assert.DoesNotContain("<button", html);
+        Assert.DoesNotContain("<form", html);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_preview_links_an_uploaded_item_instead_of_offering_it()
+    {
+        var (html, _, _) = await RenderWorkflowHub(
+            s =>
+            [
+                Artifact(s, "workflow", "workflows/align", PreparedArtifactStatus.Ready),
+                Artifact(s, "workflow", "workflows/other", PreparedArtifactStatus.Ready)
+            ],
+            (db, s) => db.Accessions.Add(new Accession
+            {
+                SubmissionId = s.Id,
+                ObjectKind = "workflow",
+                Alias = "workflow/workflows/align",
+                AccessionNumber = "42"
+            }),
+            SubmissionTarget.Production);
+
+        var uploaded = RowWith(html, "workflows/align");
+        Assert.Contains("""<a href="https://workflowhub.eu/workflows/42">""", uploaded);
+        Assert.Contains("Uploaded", uploaded);
+        Assert.DoesNotContain(@"type=""checkbox""", uploaded);
+        Assert.Contains(@"name=""item""", RowWith(html, "workflows/other"));
     }
 
     private static Submission Submission(string endpoint, string projectName, string tokenHash) => new()

@@ -76,7 +76,10 @@ Under the `EndpointSubmission` section (or `EndpointSubmission__*` environment v
 | `HookMaxAgeSeconds` | `300` | How stale an `iat` may be. |
 | `HookSharedSecret` | — | Provisional caller authentication outside Development. Unset means the hook refuses to serve. |
 
-Plus `PostgresConnectionString` at the root.
+Plus `PostgresConnectionString` at the root, and `WorkflowHub__PreparationTimeoutSeconds` (default `180`,
+1 to 3600): the seconds the ARC checkout may take before the WorkflowHub hook records a failure and
+answers anyway. Packing starts after the checkout and runs to the end (usually seconds), so the hook can
+answer somewhat later than this limit.
 
 In the `Development` environment, hook authentication is bypassed by a development-only
 `IHookAuthenticator` registration. Other environments always use the shared-secret authenticator and

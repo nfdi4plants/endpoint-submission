@@ -25,11 +25,21 @@ builder.Services.AddOpenApiDocument(config =>
 builder.Services.Configure<EndpointSubmissionOptions>(
     builder.Configuration.GetSection(EndpointSubmissionOptions.SectionName));
 
+builder.Services.AddOptions<WorkflowHubOptions>()
+    .Bind(builder.Configuration.GetSection(WorkflowHubOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+builder.Services.AddSingleton<KeyedAsyncLock>();
+
 var connectionString = builder.Configuration.GetValue<string>("PostgresConnectionString");
 builder.Services.AddDbContext<SubmissionDbContext>(options => options.UseNpgsql(connectionString));
 
 // Reads the DataHUB through the DataHubClient library, which brings its own transport.
 builder.Services.AddSingleton<IArcMetadataReader, ArcMetadataReader>();
+
+// Placeholder until the real packer is registered here.
+builder.Services.AddSingleton<IWorkflowCratePacker, UnavailableWorkflowCratePacker>();
 
 builder.Services.AddScoped<SubmissionIntakeService>();
 builder.Services.AddScoped<SubmissionPageAccess>();

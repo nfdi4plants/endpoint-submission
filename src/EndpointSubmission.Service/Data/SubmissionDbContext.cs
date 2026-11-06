@@ -12,6 +12,7 @@ public class SubmissionDbContext(DbContextOptions<SubmissionDbContext> options) 
     public DbSet<Accession> Accessions => Set<Accession>();
     public DbSet<SubmissionEvent> SubmissionEvents => Set<SubmissionEvent>();
     public DbSet<Notification> Notifications => Set<Notification>();
+    public DbSet<PreparedArtifact> PreparedArtifacts => Set<PreparedArtifact>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -44,6 +45,22 @@ public class SubmissionDbContext(DbContextOptions<SubmissionDbContext> options) 
                 .HasForeignKey(x => x.SubmissionId).OnDelete(DeleteBehavior.Cascade);
             e.HasMany(x => x.Events).WithOne(x => x.Submission)
                 .HasForeignKey(x => x.SubmissionId).OnDelete(DeleteBehavior.Cascade);
+            e.HasMany(x => x.PreparedArtifacts).WithOne(x => x.Submission)
+                .HasForeignKey(x => x.SubmissionId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<PreparedArtifact>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.SubmissionId, x.ItemKind, x.ItemIdentifier }).IsUnique();
+            e.Property(x => x.ItemKind).HasMaxLength(64).IsRequired();
+            e.Property(x => x.ItemIdentifier).HasMaxLength(256).IsRequired();
+            e.Property(x => x.Title).HasMaxLength(1024);
+            e.Property(x => x.Description).HasColumnType("text");
+            e.Property(x => x.FailureReasonsJson).HasColumnType("jsonb").IsRequired();
+            e.Property(x => x.MetadataJson).HasColumnType("jsonb").IsRequired();
+            e.Property(x => x.Content).HasColumnType("bytea");
+            e.Property(x => x.ContentSha256).HasMaxLength(64);
         });
 
         b.Entity<SubmissionAttempt>(e =>

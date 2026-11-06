@@ -1,10 +1,14 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using EndpointSubmission.Service.Data;
 using EndpointSubmission.Service.Endpoints.ENA;
 using EndpointSubmission.Service.Endpoints.WorkflowHub;
 using EndpointSubmission.Service.Models;
+using EndpointSubmission.Service.Pages;
 using EndpointSubmission.Service.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -46,6 +50,45 @@ public class SubmissionIntakeServiceTests
         }
     }
 
+    /// <summary>
+    /// Stands in for the crate packer. Records the token and instance it was handed, so tests can
+    /// assert the PAT reached preparation during the hook and nowhere else.
+    /// </summary>
+    private sealed class FakeCratePacker : IWorkflowCratePacker
+    {
+        public WorkflowPreparation Result { get; set; } = new([], null, true, null);
+
+        /// <summary>Thrown instead of returning <see cref="Result"/> when set.</summary>
+        public Exception? Fail { get; set; }
+
+        /// <summary>Awaited inside the call before it answers, to hold a preparation open.</summary>
+        public Func<CancellationToken, Task>? Gate { get; set; }
+
+        public List<string> TokensSeen { get; } = [];
+        public List<Uri> InstancesSeen { get; } = [];
+
+        public async Task<WorkflowPreparation> PrepareAsync(
+            Uri dataHubInstance, int projectId, string commitSha, string token, CancellationToken ct)
+        {
+            TokensSeen.Add(token);
+            InstancesSeen.Add(dataHubInstance);
+            if (Gate is not null) await Gate(ct);
+            return Fail is null ? Result : throw Fail;
+        }
+    }
+
+    private sealed class ListLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => Messages.Add(formatter(state, exception) + exception);
+    }
+
     private static (EnaSubmissionHandler Service, SubmissionDbContext Db, FakeDataHub Hub) Build(
         bool allowProduction = false)
     {
@@ -72,7 +115,8 @@ public class SubmissionIntakeServiceTests
         return (service, db, hub);
     }
 
-    private static (WorkflowHubSubmissionHandler Service, SubmissionDbContext Db, FakeDataHub Hub) BuildWorkflowHub()
+    private static (WorkflowHubSubmissionHandler Service, SubmissionDbContext Db, FakeDataHub Hub, FakeCratePacker Packer)
+        BuildWorkflowHub(ILogger<WorkflowHubSubmissionHandler>? logger = null, WorkflowHubOptions? workflowHubOptions = null)
     {
         var db = new SubmissionDbContext(new DbContextOptionsBuilder<SubmissionDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
@@ -89,7 +133,12 @@ public class SubmissionIntakeServiceTests
             db, hub, new DataHubUrlGuard(options), new StatusTokenService(), options,
             NullLogger<SubmissionIntakeService>.Instance);
 
-        return (new WorkflowHubSubmissionHandler(intake), db, hub);
+        var packer = new FakeCratePacker();
+        var handler = new WorkflowHubSubmissionHandler(
+            intake, db, packer, new KeyedAsyncLock(), Options.Create(workflowHubOptions ?? new WorkflowHubOptions()),
+            logger ?? NullLogger<WorkflowHubSubmissionHandler>.Instance);
+
+        return (handler, db, hub, packer);
     }
 
     private static HookRequest Hook(object? packagePayload = null, long? iat = null, string? roCrateUrl = RoCrateUrl) =>
@@ -127,7 +176,7 @@ public class SubmissionIntakeServiceTests
     [Fact]
     public async Task WorkflowHub_uses_the_same_submission_model_with_its_own_route()
     {
-        var (service, db, hub) = BuildWorkflowHub();
+        var (service, db, hub, _) = BuildWorkflowHub();
 
         var result = Assert.IsType<IntakeResult.Accepted>(
             await service.HandleAsync(Hook(new { target = "sandbox", contract_version = 1 }), default));
@@ -192,6 +241,52 @@ public class SubmissionIntakeServiceTests
         var stale = DateTimeOffset.UtcNow.AddHours(-1).ToUnixTimeSeconds();
 
         var result = await service.HandleAsync(Hook(iat: stale), default);
+
+        Assert.IsType<IntakeResult.Unauthorized>(result);
+    }
+
+    private static SubmissionIntakeService BuildIntake()
+    {
+        var db = new SubmissionDbContext(new DbContextOptionsBuilder<SubmissionDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options);
+        var options = Options.Create(new EndpointSubmissionOptions
+        {
+            AllowedDataHubHosts = ["gitdev.nfdi4plants.org"],
+            PublicBaseUrl = "https://submit.example.org",
+            HookMaxAgeSeconds = 300,
+            HookSharedSecret = "secret"
+        });
+        return new SubmissionIntakeService(
+            db, new FakeDataHub(), new DataHubUrlGuard(options), new StatusTokenService(), options,
+            NullLogger<SubmissionIntakeService>.Instance);
+    }
+
+    [Fact]
+    public async Task Measures_freshness_from_when_the_hook_was_received_when_the_caller_says_so()
+    {
+        // The hook arrived ten minutes ago and has waited since, for example behind a project lock.
+        // Its iat is 30 seconds older than its arrival, which is fresh, although it is more than
+        // HookMaxAgeSeconds older than now.
+        var intake = BuildIntake();
+        var receivedAt = DateTimeOffset.UtcNow.AddMinutes(-10);
+        var request = Hook(iat: receivedAt.AddSeconds(-30).ToUnixTimeSeconds());
+
+        var result = await intake.IntakeAsync(
+            request, "ena", SubmissionTarget.Sandbox, releaseDate: null, default, receivedAt);
+
+        Assert.IsType<IntakeResult.Accepted>(result);
+    }
+
+    [Fact]
+    public async Task Rejects_an_iat_that_was_already_stale_when_the_hook_was_received()
+    {
+        var intake = BuildIntake();
+        var receivedAt = DateTimeOffset.UtcNow.AddMinutes(-10);
+        var request = Hook(iat: receivedAt.AddSeconds(-400).ToUnixTimeSeconds());
+
+        var result = await intake.IntakeAsync(
+            request, "ena", SubmissionTarget.Sandbox, releaseDate: null, default, receivedAt);
 
         Assert.IsType<IntakeResult.Unauthorized>(result);
     }
@@ -351,5 +446,319 @@ public class SubmissionIntakeServiceTests
 
         Assert.Contains("project 99", result.Reason);
         Assert.Empty(hub.TokensSeen);
+    }
+
+    private const string Pat = "glpat-short-lived";
+
+    private static WorkflowPreparation MixedPreparation() => new(
+        [
+            new("workflow", "workflows/align", "Align reads", "Aligns reads.",
+                PreparedWorkflowItemStatus.Uploadable, [], Encoding.UTF8.GetBytes("PK crate bytes")),
+            new("run", "runs/r1", "Run one", null,
+                PreparedWorkflowItemStatus.NotReady, ["The run has no outputs."], null),
+            new("run", "runs/r2", null, null,
+                PreparedWorkflowItemStatus.PackFailed, ["Zip assembly failed."], null)
+        ],
+        LicenseSpdxId: "MIT", LicensePresent: true, Error: null);
+
+    private static Task<IntakeResult> WorkflowHubHook(WorkflowHubSubmissionHandler service)
+        => service.HandleAsync(Hook(new { target = "sandbox", contract_version = 1 }), default);
+
+    /// <summary>Every string column of the submission, its events and its prepared artifacts.</summary>
+    private static IEnumerable<string?> StoredStrings(Submission stored)
+        => typeof(Submission).GetProperties()
+            .Where(p => p.PropertyType == typeof(string))
+            .Select(p => (string?)p.GetValue(stored))
+            .Concat(stored.Events.Select(e => e.Message))
+            .Concat(stored.PreparedArtifacts.SelectMany(a => typeof(PreparedArtifact).GetProperties()
+                .Where(p => p.PropertyType == typeof(string))
+                .Select(p => (string?)p.GetValue(a))));
+
+    [Fact]
+    public async Task WorkflowHub_hook_prepares_one_artifact_per_item_with_the_hook_token()
+    {
+        var (service, db, _, packer) = BuildWorkflowHub();
+        packer.Result = MixedPreparation();
+
+        Assert.IsType<IntakeResult.Accepted>(await WorkflowHubHook(service));
+
+        var artifacts = await db.PreparedArtifacts.ToListAsync();
+        Assert.Equal(3, artifacts.Count);
+
+        var ready = Assert.Single(artifacts, a => a.ItemIdentifier == "workflows/align");
+        var crate = Encoding.UTF8.GetBytes("PK crate bytes");
+        Assert.Equal("workflow", ready.ItemKind);
+        Assert.Equal(PreparedArtifactStatus.Ready, ready.Status);
+        Assert.Equal(crate, ready.Content);
+        Assert.Equal(crate.Length, ready.SizeBytes);
+        Assert.Equal(Convert.ToHexString(SHA256.HashData(crate)).ToLowerInvariant(), ready.ContentSha256);
+        Assert.Equal("""{"licenseSpdxId":"MIT","licensePresent":true}""", ready.MetadataJson);
+
+        var notReady = Assert.Single(artifacts, a => a.ItemIdentifier == "runs/r1");
+        Assert.Equal("run", notReady.ItemKind);
+        Assert.Equal(PreparedArtifactStatus.NotReady, notReady.Status);
+        Assert.Equal("""["The run has no outputs."]""", notReady.FailureReasonsJson);
+
+        var failed = Assert.Single(artifacts, a => a.ItemIdentifier == "runs/r2");
+        Assert.Equal(PreparedArtifactStatus.PreparationFailed, failed.Status);
+
+        Assert.All(new[] { notReady, failed }, a =>
+        {
+            Assert.Null(a.Content);
+            Assert.Null(a.SizeBytes);
+            Assert.Null(a.ContentSha256);
+        });
+
+        var submission = await db.Submissions.Include(s => s.Events).SingleAsync();
+        Assert.Equal(SubmissionStatus.PreviewReady, submission.Status);
+        var completed = Assert.Single(submission.Events, e => e.Step == "preparation.completed");
+        Assert.Contains("1 ready, 1 not ready, 1 failed", completed.Message);
+
+        Assert.Equal(Pat, Assert.Single(packer.TokensSeen));
+        Assert.Equal(new Uri("https://gitdev.nfdi4plants.org"), Assert.Single(packer.InstancesSeen));
+    }
+
+    [Fact]
+    public async Task WorkflowHub_hook_never_stores_the_token_in_the_prepared_artifacts()
+    {
+        var (service, db, _, packer) = BuildWorkflowHub();
+        packer.Result = MixedPreparation();
+
+        await WorkflowHubHook(service);
+
+        // Every string column of every stored entity, plus the crate bytes.
+        var stored = await db.Submissions.Include(s => s.Events).Include(s => s.PreparedArtifacts).SingleAsync();
+        Assert.NotEmpty(stored.PreparedArtifacts);
+        Assert.All(StoredStrings(stored), s => Assert.DoesNotContain(Pat, s ?? ""));
+
+        var needle = Encoding.UTF8.GetBytes(Pat);
+        Assert.All(stored.PreparedArtifacts.Where(a => a.Content is not null),
+            a => Assert.Equal(-1, a.Content.AsSpan().IndexOf(needle)));
+    }
+
+    [Fact]
+    public async Task WorkflowHub_re_click_after_a_successful_preparation_does_not_prepare_again()
+    {
+        var (service, db, _, packer) = BuildWorkflowHub();
+        packer.Result = MixedPreparation();
+
+        await WorkflowHubHook(service);
+        Assert.IsType<IntakeResult.Accepted>(await WorkflowHubHook(service));
+
+        Assert.Single(packer.TokensSeen);
+        Assert.Equal(3, await db.PreparedArtifacts.CountAsync());
+    }
+
+    [Fact]
+    public async Task WorkflowHub_re_click_after_a_failed_preparation_prepares_again()
+    {
+        var (service, db, _, packer) = BuildWorkflowHub();
+        packer.Fail = new InvalidOperationException("boom");
+
+        await WorkflowHubHook(service);
+        Assert.Empty(db.PreparedArtifacts);
+
+        packer.Fail = null;
+        packer.Result = MixedPreparation();
+        await WorkflowHubHook(service);
+
+        Assert.Equal(2, packer.TokensSeen.Count);
+        Assert.Equal(3, await db.PreparedArtifacts.CountAsync());
+        Assert.Equal(SubmissionStatus.PreviewReady, (await db.Submissions.SingleAsync()).Status);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_packer_error_is_recorded_without_artifacts_and_the_hook_still_answers()
+    {
+        var (service, db, _, packer) = BuildWorkflowHub();
+        packer.Result = new WorkflowPreparation([], null, false, "The ARC could not be loaded.");
+
+        Assert.IsType<IntakeResult.Accepted>(await WorkflowHubHook(service));
+
+        Assert.Empty(db.PreparedArtifacts);
+        var submission = await db.Submissions.Include(s => s.Events).SingleAsync();
+        Assert.Equal(SubmissionStatus.Created, submission.Status);
+        var failed = Assert.Single(submission.Events, e => e.Step == "preparation.failed");
+        Assert.Equal(SubmissionEventLevel.Error, failed.Level);
+        Assert.Equal("The ARC could not be loaded.", failed.Message);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_redacts_the_token_from_a_packer_error()
+    {
+        var (service, db, _, packer) = BuildWorkflowHub();
+        packer.Result = new WorkflowPreparation([], null, false, $"Checkout of https://oauth2:{Pat}@git failed.");
+
+        await WorkflowHubHook(service);
+
+        var failed = await db.SubmissionEvents.SingleAsync(e => e.Step == "preparation.failed");
+        Assert.Equal("Checkout of https://oauth2:[REDACTED]@git failed.", failed.Message);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_exception_text_never_reaches_the_store_or_the_log()
+    {
+        var logger = new ListLogger<WorkflowHubSubmissionHandler>();
+        var (service, db, _, packer) = BuildWorkflowHub(logger);
+        packer.Fail = new InvalidOperationException($"git clone https://oauth2:{Pat}@gitdev failed");
+
+        Assert.IsType<IntakeResult.Accepted>(await WorkflowHubHook(service));
+
+        Assert.Empty(db.PreparedArtifacts);
+        var submission = await db.Submissions.Include(s => s.Events).SingleAsync();
+        Assert.Equal(SubmissionStatus.Created, submission.Status);
+        var failed = Assert.Single(submission.Events, e => e.Step == "preparation.failed");
+        Assert.Equal(SubmissionEventLevel.Error, failed.Level);
+        Assert.Equal("Preparing the WorkflowHub crates failed.", failed.Message);
+
+        var strings = typeof(Submission).GetProperties()
+            .Where(p => p.PropertyType == typeof(string))
+            .Select(p => (string?)p.GetValue(submission))
+            .Concat(submission.Events.Select(e => e.Message))
+            .Concat(logger.Messages);
+        Assert.All(strings, s => Assert.DoesNotContain(Pat, s ?? ""));
+        Assert.Contains(logger.Messages, m => m.Contains(nameof(InvalidOperationException)));
+    }
+
+    [Fact]
+    public async Task WorkflowHub_redacts_the_token_from_every_string_the_packer_returns()
+    {
+        var (service, db, _, packer) = BuildWorkflowHub();
+        packer.Result = new WorkflowPreparation(
+            [
+                new($"run-{Pat}", $"runs/{Pat}", $"Title {Pat}", $"Description {Pat}",
+                    PreparedWorkflowItemStatus.NotReady, [$"Reason {Pat}"], null)
+            ],
+            LicenseSpdxId: $"MIT-{Pat}", LicensePresent: true, Error: null);
+
+        await WorkflowHubHook(service);
+
+        var stored = await db.Submissions.Include(s => s.Events).Include(s => s.PreparedArtifacts).SingleAsync();
+        var artifact = Assert.Single(stored.PreparedArtifacts);
+        Assert.Equal("Title [REDACTED]", artifact.Title);
+        Assert.Equal("""["Reason [REDACTED]"]""", artifact.FailureReasonsJson);
+        Assert.All(StoredStrings(stored), s => Assert.DoesNotContain(Pat, s ?? ""));
+    }
+
+    [Fact]
+    public async Task WorkflowHub_truncates_packer_strings_to_the_column_lengths()
+    {
+        var (service, db, _, packer) = BuildWorkflowHub();
+        packer.Result = new WorkflowPreparation(
+            [
+                new(new string('k', 100), new string('i', 300), new string('t', 2000), null,
+                    PreparedWorkflowItemStatus.NotReady, [], null)
+            ],
+            LicenseSpdxId: null, LicensePresent: true, Error: null);
+
+        await WorkflowHubHook(service);
+
+        var artifact = await db.PreparedArtifacts.SingleAsync();
+        Assert.Equal(64, artifact.ItemKind.Length);
+        Assert.Equal(256, artifact.ItemIdentifier.Length);
+        Assert.Equal(1024, artifact.Title!.Length);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_zero_items_is_a_completed_preparation_and_a_re_click_does_not_prepare_again()
+    {
+        var (service, db, _, packer) = BuildWorkflowHub();
+
+        await WorkflowHubHook(service);
+        Assert.IsType<IntakeResult.Accepted>(await WorkflowHubHook(service));
+
+        Assert.Single(packer.TokensSeen);
+        Assert.Empty(db.PreparedArtifacts);
+        var submission = await db.Submissions.Include(s => s.Events).SingleAsync();
+        Assert.Equal(SubmissionStatus.PreviewReady, submission.Status);
+        var completed = Assert.Single(submission.Events, e => e.Step == "preparation.completed");
+        Assert.Equal("Prepared 0 WorkflowHub items: no workflows or runs were found in this commit.", completed.Message);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_preparation_that_takes_too_long_is_recorded_as_a_failure()
+    {
+        var (service, db, _, packer) = BuildWorkflowHub(
+            workflowHubOptions: new WorkflowHubOptions { PreparationTimeoutSeconds = 1 });
+        packer.Gate = ct => Task.Delay(Timeout.Infinite, ct);
+
+        Assert.IsType<IntakeResult.Accepted>(await WorkflowHubHook(service));
+
+        Assert.Empty(db.PreparedArtifacts);
+        var failed = await db.SubmissionEvents.SingleAsync(e => e.Step == "preparation.failed");
+        Assert.Equal(SubmissionEventLevel.Error, failed.Level);
+        Assert.Equal("Preparing the WorkflowHub crates took too long.", failed.Message);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_caller_cancellation_propagates_and_records_no_preparation_event()
+    {
+        var (service, db, _, packer) = BuildWorkflowHub();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        packer.Gate = ct =>
+        {
+            entered.TrySetResult();
+            return Task.Delay(Timeout.Infinite, ct);
+        };
+        using var cts = new CancellationTokenSource();
+
+        var call = service.HandleAsync(Hook(new { target = "sandbox", contract_version = 1 }), cts.Token);
+        await entered.Task;
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => call);
+        Assert.DoesNotContain(await db.SubmissionEvents.ToListAsync(), e => e.Step.StartsWith("preparation."));
+        Assert.Empty(db.PreparedArtifacts);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_second_click_waits_for_the_running_preparation_and_returns_the_working_link()
+    {
+        var (service, db, _, packer) = BuildWorkflowHub();
+        packer.Result = MixedPreparation();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        packer.Gate = async _ =>
+        {
+            entered.TrySetResult();
+            await release.Task;
+        };
+
+        var first = WorkflowHubHook(service);
+        await entered.Task;
+        var second = WorkflowHubHook(service);
+
+        // The second click queues on the project lock, so it neither prepares nor finishes.
+        await Task.Delay(200);
+        Assert.False(second.IsCompleted);
+        Assert.Single(packer.TokensSeen);
+
+        release.SetResult();
+        Assert.IsType<IntakeResult.Accepted>(await first);
+        var secondResult = Assert.IsType<IntakeResult.Accepted>(await second);
+
+        Assert.Single(packer.TokensSeen);
+        Assert.Equal(1, await db.Submissions.CountAsync());
+        Assert.Equal(3, await db.PreparedArtifacts.CountAsync());
+
+        var token = secondResult.FollowMe[(secondResult.FollowMe.IndexOf("?t=", StringComparison.Ordinal) + 3)..];
+        var access = new SubmissionPageAccess(db, new StatusTokenService());
+        Assert.NotNull(await access.FindAsync(secondResult.Submission.Id, token, "workflowhub", default));
+    }
+
+    [Fact]
+    public async Task KeyedAsyncLock_makes_one_key_wait_without_blocking_another_key()
+    {
+        var locks = new KeyedAsyncLock();
+        using var held = await locks.AcquireAsync("a", default);
+
+        var sameKey = locks.AcquireAsync("a", default);
+        using var otherKey = await locks.AcquireAsync("b", default).WaitAsync(TimeSpan.FromSeconds(5));
+
+        await Task.Delay(100);
+        Assert.False(sameKey.IsCompleted);
+
+        held.Dispose();
+        using var acquired = await sameKey.WaitAsync(TimeSpan.FromSeconds(5));
     }
 }
