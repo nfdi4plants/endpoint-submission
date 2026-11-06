@@ -13,7 +13,6 @@
     <Compile Include="Requirements.fs" />
     <Compile Include="Readiness.fs" />
     <Compile Include="Pack.fs" />
-    <Compile Include="Checkout.fs" />
     <Compile Include="Client.fs" />
   </ItemGroup>
 

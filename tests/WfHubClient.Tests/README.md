@@ -27,6 +27,30 @@ challenge, register a confidential OAuth application (`urn:ietf:wg:oauth:2.0:oob
 `/oauth/authorize` and `/oauth/token`; send `Accept: application/json` on the token request,
 or the endpoint answers 500.
 
+## Checkout tests
+
+The tests for the checkout itself are in `tests/DataHubGit.Tests`, see its README. The Pack guard
+for workflow files that are LFS pointers is in `PackTests.fs`.
+
+## Live DataHUB checkout test
+
+The checkout and pack test in `LiveTests.fs` uses DataHubGit for the checkout. It stays skipped
+unless these variables are set:
+
+```powershell
+$env:DATAHUB_HOST       = "gitdev.nfdi4plants.org"
+$env:DATAHUB_PROJECT_ID = "<numeric project id>"
+$env:DATAHUB_PAT        = "<personal access token>"
+$env:DATAHUB_COMMIT     = "<optional 40 character commit id>"
+dotnet test tests/WfHubClient.Tests
+```
+
+It checks out the project with `Pack.WorkflowHubLfsInclude` and a 5 minute timeout, asserts
+that the commit id is hex (and equals `DATAHUB_COMMIT` when set), scans every file under the
+temporary root for the token, runs `Pack.pack` on the working tree and prints each item's
+identifier and status. It then disposes the checkout and asserts the root is gone. The test
+only reads from the project. Unset the variables afterwards.
+
 ## Parity with the `workflowhub` validation package
 
 The readiness requirements in `src/WfHubClient` are a port of the `workflowhub` ARC

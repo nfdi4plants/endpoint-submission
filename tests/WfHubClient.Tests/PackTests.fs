@@ -241,6 +241,27 @@ let tests =
                     | Error message -> Expect.stringContains message "gone.csv" "expected the missing path"
                     | Ok _ -> failtest "expected an error")
 
+            testCase "files above the raw size limit fail before any file is read" <| fun () ->
+                // The files hold their own names, so "a.csv" has 5 bytes, "d/b.csv" has 7 and the sum is 12.
+                withArc [ "a.csv"; "d/b.csv" ] (fun dir ->
+                    let json = crate [ "./a.csv"; "./d" ]
+                    let limited limit = Pack.assembleZipWithLimit limit dir json (Pack.referencedFiles json)
+
+                    do
+                        // An exclusive lock makes any read of a.csv throw, so an Error proves that the
+                        // size check ran first.
+                        use _locked = new FileStream(Path.Combine(dir, "a.csv"), FileMode.Open, FileAccess.Read, FileShare.None)
+
+                        match limited 11L with
+                        | Error message ->
+                            Expect.stringContains message "before compression" "the message names the cause"
+                            Expect.stringContains message "The service packs at most" "the message names the limit"
+                        | Ok _ -> failtest "expected an error for a sum of 12 bytes and a limit of 11"
+
+                    match limited 12L with
+                    | Ok _ -> ()
+                    | Error message -> failtestf "a sum equal to the limit must pass, got: %s" message)
+
             testCase "fragment and URL ids produce no entries" <| fun () ->
                 withArc [ "a.csv" ] (fun dir ->
                     Expect.equal
@@ -461,6 +482,22 @@ let tests =
                         (entryText zip "assays/MyAssay/dataset/data.csv")
                         lfsPointerText
                         "expected the raw pointer text")
+
+            testCase "a workflow file that is still an LFS pointer makes the item fail" <| fun () ->
+                let fixture = Fixtures.validArc ()
+
+                let pointerTool =
+                    { fixture with
+                        ExtraFiles =
+                            fixture.ExtraFiles
+                            |> List.map (fun (path, content) ->
+                                if path = "workflows/MyWorkflow/tool.cwl" then path, lfsPointerText else path, content) }
+
+                match (item "MyWorkflow" (packFixture pointerTool)).Status with
+                | PackFailed message ->
+                    Expect.stringContains message "Git LFS pointers" "the message names the cause"
+                    Expect.stringContains message "workflows/MyWorkflow/tool.cwl" "the message names the file"
+                | other -> failtestf "expected PackFailed, got %A" other
 
             // ARCtrl 3.3.0 stamps `dateCreated` and `datePublished` at every write unless a timestamp
             // is passed, and Pack passes none, so full byte-identity across packs is out of reach here.

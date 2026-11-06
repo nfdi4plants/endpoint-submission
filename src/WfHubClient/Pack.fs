@@ -1,12 +1,19 @@
 namespace WfHubClient
 
 open System
+open System.Collections.Generic
 open System.IO
 open System.IO.Compression
 open System.Text.Json
 open ARCtrl
 
 module Pack =
+
+    /// Hydrates the workflow folder only. Run crates also ship files from there, and a pointer
+    /// would break them. Everything outside the hydrated paths stays a pointer. Callers pass it to
+    /// `DataHubGit.Checkout.checkout` as the LFS include list.
+    let WorkflowHubLfsInclude: IReadOnlyList<string> =
+        Array.AsReadOnly [| "workflows/**" |] :> IReadOnlyList<string>
 
     // Two or more scheme characters, so a Windows drive such as `C:/x` is a path.
     let private uriScheme = Text.RegularExpressions.Regex @"^[A-Za-z][A-Za-z0-9+.-]+:"
@@ -48,11 +55,46 @@ module Pack =
                 |> List.distinct
             | _ -> []
 
+    let private pointerOid = Text.RegularExpressions.Regex @"^oid sha256:[0-9a-f]{64}$"
+    let private pointerSize = Text.RegularExpressions.Regex @"^size [0-9]+$"
+
+    /// A git LFS pointer is a regular file of at most 1024 bytes that starts with the spec line and
+    /// carries an `oid sha256:` line and a `size` line. A checkout without LFS smudging leaves
+    /// these in place of the real content.
+    let internal isLfsPointer (path: string) =
+        let info = FileInfo path
+
+        if not info.Exists || info.Length > 1024L then
+            false
+        else
+            let lines = (File.ReadAllText path).Split('\n') |> Array.map (fun line -> line.TrimEnd '\r')
+
+            lines.Length > 0
+            && lines[0].StartsWith("version https://git-lfs.github.com/spec/v1", StringComparison.Ordinal)
+            && lines |> Array.exists pointerOid.IsMatch
+            && lines |> Array.exists pointerSize.IsMatch
+
+    /// The most file content, in bytes before compression, that one crate may hold. It is twice
+    /// WorkflowHub's upload limit, because text files compress well. A larger sum fails
+    /// the item before any file is read, so one huge file cannot exhaust the service's memory.
+    let internal MaxRawCrateBytes = 2L * WorkflowHubLimits.MaxUploadBytes
+
+    // Rounds up, so a sum above the limit never reads as equal to it.
+    let private megabytes (bytes: int64) =
+        (bytes + 1024L * 1024L - 1L) / (1024L * 1024L)
+
     /// assembleZip adds entries in ordinal path order with fixed timestamps. ARCtrl writes
     /// wall-clock dates into the crate JSON on every write, so two zips of the same ARC contents
     /// differ only where the crate JSON differs.
     /// Each path is a file or a folder under `arcDirectory`. A folder contributes every file below it.
-    let internal assembleZip (arcDirectory: string) (crateJson: string) (files: string list) =
+    /// The files must add up to `maxRawBytes` or less. The sizes come from the file system, and
+    /// the check runs before any file is read.
+    let internal assembleZipWithLimit
+        (maxRawBytes: int64)
+        (arcDirectory: string)
+        (crateJson: string)
+        (files: string list)
+        =
         let root = Path.GetFullPath arcDirectory
         // A filesystem root such as `C:\` or `/` already ends with a separator.
         let rootPrefix =
@@ -155,28 +197,51 @@ module Pack =
         let missing =
             resolved |> List.choose (fun (file, found) -> if found.IsNone then Some file else None)
 
+        // Only valid once `missing` is empty, because it reads `found.Value`.
+        let uniqueFiles () =
+            resolved
+            |> List.collect (fun (_, found) -> found.Value)
+            |> List.filter (
+                let seen =
+                    Collections.Generic.HashSet<string>(
+                        [ "ro-crate-metadata.json" ],
+                        if OperatingSystem.IsWindows() then
+                            StringComparer.OrdinalIgnoreCase
+                        else
+                            StringComparer.Ordinal
+                    )
+
+                fun (name, _) -> seen.Add name
+            )
+
+        // Workflow files that are still pointers would ship as placeholders. Pointers outside
+        // workflows/ are expected, because a checkout hydrates only that folder.
+        let pointerEntries () =
+            uniqueFiles ()
+            |> List.filter (fun (name, full) ->
+                (name.StartsWith("workflows/", StringComparison.Ordinal) || name.EndsWith(".cwl", StringComparison.Ordinal))
+                && isLfsPointer full)
+            |> List.map fst
+
+        // The size of every file the zip will hold, taken from the file system without reading
+        // any content. Only valid once `missing` is empty, like `uniqueFiles`.
+        let rawBytes () =
+            uniqueFiles () |> List.sumBy (fun (_, full) -> FileInfo(full).Length)
+
         match missing with
         | _ :: _ ->
             Error
                 $"""The crate references file(s) that are missing from the ARC directory or not allowed in a crate (outside the ARC, the ARC root itself, a link, under .git, or containing ':'): {String.concat ", " missing}"""
+        | [] when not (List.isEmpty (pointerEntries ())) ->
+            Error
+                $"""These workflow files are Git LFS pointers whose content was not downloaded, so the crate would ship placeholders instead of the files: {String.concat ", " (pointerEntries ())}"""
+        | [] when rawBytes () > maxRawBytes ->
+            Error
+                $"The files of this item add up to {megabytes (rawBytes ())} MB before compression. The service packs at most {megabytes maxRawBytes} MB of files into one crate."
         | [] ->
             let entries =
                 ("ro-crate-metadata.json", Text.Encoding.UTF8.GetBytes crateJson)
-                :: (resolved
-                    |> List.collect (fun (_, found) -> found.Value)
-                    |> List.filter (
-                        let seen =
-                            Collections.Generic.HashSet<string>(
-                                [ "ro-crate-metadata.json" ],
-                                if OperatingSystem.IsWindows() then
-                                    StringComparer.OrdinalIgnoreCase
-                                else
-                                    StringComparer.Ordinal
-                            )
-
-                        fun (name, _) -> seen.Add name
-                    )
-                    |> List.map (fun (name, full) -> name, File.ReadAllBytes full))
+                :: (uniqueFiles () |> List.map (fun (name, full) -> name, File.ReadAllBytes full))
                 |> List.sortWith (fun (a, _) (b, _) -> String.CompareOrdinal(a, b))
 
             use buffer = new MemoryStream()
@@ -191,6 +256,10 @@ module Pack =
                     stream.Write(bytes, 0, bytes.Length)
 
             Ok(buffer.ToArray())
+
+    /// `assembleZipWithLimit` with the service's limit, `MaxRawCrateBytes`.
+    let internal assembleZip (arcDirectory: string) (crateJson: string) (files: string list) =
+        assembleZipWithLimit MaxRawCrateBytes arcDirectory crateJson files
 
     let private packItem
         (arcDirectory: string)

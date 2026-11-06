@@ -4,6 +4,7 @@ open System
 open System.Net.Http
 open System.Net.Http.Headers
 open Expecto
+open DataHubGit
 open WfHubClient
 open WfHubClient.Tests.FixtureArc
 
@@ -109,4 +110,67 @@ let tests =
                 finally
                     use delete = authed HttpMethod.Delete (WorkflowHubApi.workflowPath result.WorkflowId)
                     http.Send delete |> ignore
+    ]
+
+/// DATAHUB_HOST, DATAHUB_PROJECT_ID and DATAHUB_PAT set (DATAHUB_COMMIT optional) => the checkout
+/// test runs against that DataHUB project. It only reads from the project.
+let private dataHubSettings =
+    match env "DATAHUB_HOST", env "DATAHUB_PROJECT_ID", env "DATAHUB_PAT" with
+    | Some host, Some projectId, Some pat -> Some(host, int projectId, pat, env "DATAHUB_COMMIT")
+    | _ -> None
+
+let private describe (status: ItemStatus) =
+    match status with
+    | Uploadable(_, size) -> $"uploadable, {size} bytes"
+    | NotReady failures -> $"not ready, {failures.Length} failed requirement(s)"
+    | PackFailed error -> $"pack failed: {error}"
+
+[<Tests>]
+let liveCheckoutTests =
+    testSequenced <| testList "live checkout" [
+        match dataHubSettings with
+        | None ->
+            ptestCase "DataHUB checkout and pack (set DATAHUB_HOST, DATAHUB_PROJECT_ID, DATAHUB_PAT to run)" ignore
+        | Some(host, projectId, pat, commit) ->
+            testCase "checkout with the workflow LFS include, then pack" <| fun () ->
+                let checkout =
+                    Checkout
+                        .checkout(
+                            host,
+                            projectId,
+                            pat,
+                            Option.toObj commit,
+                            Pack.WorkflowHubLfsInclude,
+                            TimeSpan.FromMinutes 5.,
+                            Threading.CancellationToken.None
+                        )
+                        .GetAwaiter()
+                        .GetResult()
+
+                let root = IO.Path.GetDirectoryName checkout.Directory
+
+                try
+                    Expect.isTrue (IO.Directory.Exists checkout.Directory) "the working tree exists"
+
+                    Expect.isTrue
+                        (Text.RegularExpressions.Regex.IsMatch(checkout.CommitSha, "^[0-9a-f]{40}([0-9a-f]{24})?$"))
+                        $"expected a hex commit id, got {checkout.CommitSha}"
+
+                    commit
+                    |> Option.iter (fun expected ->
+                        Expect.equal checkout.CommitSha (expected.ToLowerInvariant()) "the requested commit")
+
+                    for file in IO.Directory.EnumerateFiles(root, "*", IO.SearchOption.AllDirectories) do
+                        let text = Text.Encoding.Latin1.GetString(IO.File.ReadAllBytes file)
+                        Expect.isFalse (text.Contains pat) $"{file} contains the access token"
+
+                    let result = Pack.pack checkout.Directory
+                    result.ArcLoadError |> Option.iter (printfn "ARC load error: %s")
+
+                    for packed in result.Items do
+                        printfn "%s: %s" packed.Identifier (describe packed.Status)
+                finally
+                    (checkout :> IDisposable).Dispose()
+
+                Expect.isFalse (IO.Directory.Exists root) "dispose deletes the temporary root"
     ]
