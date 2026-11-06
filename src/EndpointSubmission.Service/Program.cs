@@ -8,6 +8,7 @@ using EndpointSubmission.Service.Services;
 using HealthChecks.UI.Client;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -38,8 +39,8 @@ builder.Services.AddDbContext<SubmissionDbContext>(options => options.UseNpgsql(
 // Reads the DataHUB through the DataHubClient library, which brings its own transport.
 builder.Services.AddSingleton<IArcMetadataReader, ArcMetadataReader>();
 
-// Placeholder until the real packer is registered here.
-builder.Services.AddSingleton<IWorkflowCratePacker, UnavailableWorkflowCratePacker>();
+// Checks the ARC out with git and packs the crates, with the PAT of the hook request.
+builder.Services.AddSingleton<IWorkflowCratePacker, WfHubCratePacker>();
 
 builder.Services.AddScoped<SubmissionIntakeService>();
 builder.Services.AddScoped<SubmissionPageAccess>();
@@ -60,6 +61,18 @@ builder.Services.AddHealthChecks()
     .AddNpgSql(connectionString ?? string.Empty, name: "submissions-db");
 
 var app = builder.Build();
+
+// A crash or restart can leave ARC checkouts, private repository content, in the temp folder.
+// This process has started no checkout yet, so a folder older than one preparation timeout is
+// a leftover. Tests start apps beside other processes that use the same temp folder, so they skip it.
+if (!app.Environment.IsEnvironment("Testing"))
+{
+    var preparationTimeout = TimeSpan.FromSeconds(
+        app.Services.GetRequiredService<IOptions<WorkflowHubOptions>>().Value.PreparationTimeoutSeconds);
+    var sweptCheckouts = DataHubGit.Checkout.sweepStaleRoots(preparationTimeout);
+    if (sweptCheckouts > 0)
+        app.Logger.LogInformation("Removed {Count} stale ARC checkout folders", sweptCheckouts);
+}
 
 if (app.Environment.IsDevelopment())
 {
