@@ -34,8 +34,8 @@ module Client =
             Timeout = Timeout.InfiniteTimeSpan
         )
 
-    /// How long the crate POST may take. A crate can be 100 MB, and WorkflowHub reads and registers
-    /// it before it answers.
+    /// How long the crate POST may take. A crate can be close to the 99,000,000 byte upload limit,
+    /// and WorkflowHub reads and registers it before it answers.
     let UploadTimeout = TimeSpan.FromMinutes 15.0
 
     /// The limit of every other call.

@@ -38,4 +38,8 @@ module WorkflowHubApi =
     let TeamFieldName = "workflow[project_ids][]"
 
 module WorkflowHubLimits =
-    let MaxUploadBytes = 100L * 1024L * 1024L
+    /// The largest crate zip the client uploads, in bytes. SEEK itself sets no limit on a multipart
+    /// crate upload, but WorkflowHub sits behind Cloudflare, which refuses request bodies above
+    /// "100 MB" on its Free and Pro plans without saying whether it counts 10^8 or 100 * 2^20 bytes.
+    /// The cap stays below 100,000,000 bytes and leaves 1 MB for the multipart envelope.
+    let MaxUploadBytes = 99_000_000L

@@ -75,13 +75,14 @@ module Pack =
             && lines |> Array.exists pointerSize.IsMatch
 
     /// The most file content, in bytes before compression, that one crate may hold. It is twice
-    /// WorkflowHub's upload limit, because text files compress well. A larger sum fails
+    /// the upload limit, because text files compress well. A larger sum fails
     /// the item before any file is read, so one huge file cannot exhaust the service's memory.
     let internal MaxRawCrateBytes = 2L * WorkflowHubLimits.MaxUploadBytes
 
-    // Rounds up, so a sum above the limit never reads as equal to it.
-    let private megabytes (bytes: int64) =
-        (bytes + 1024L * 1024L - 1L) / (1024L * 1024L)
+    /// Whole decimal megabytes (10^6 bytes), the unit of the upload limit. A sum rounds up and a
+    /// limit rounds down, so a sum above the limit never reads as equal to it.
+    let private megabytesUp (bytes: int64) = (bytes + 999_999L) / 1_000_000L
+    let private megabytesDown (bytes: int64) = bytes / 1_000_000L
 
     /// assembleZip adds entries in ordinal path order with fixed timestamps. ARCtrl writes
     /// wall-clock dates into the crate JSON on every write, so two zips of the same ARC contents
@@ -237,7 +238,7 @@ module Pack =
                 $"""These workflow files are Git LFS pointers whose content was not downloaded, so the crate would ship placeholders instead of the files: {String.concat ", " (pointerEntries ())}"""
         | [] when rawBytes () > maxRawBytes ->
             Error
-                $"The files of this item add up to {megabytes (rawBytes ())} MB before compression. The service packs at most {megabytes maxRawBytes} MB of files into one crate."
+                $"The files of this item add up to {megabytesUp (rawBytes ())} MB before compression. The service packs at most {megabytesDown maxRawBytes} MB of files into one crate."
         | [] ->
             let entries =
                 ("ro-crate-metadata.json", Text.Encoding.UTF8.GetBytes crateJson)
@@ -281,7 +282,7 @@ module Pack =
                     | Error error -> PackFailed error
                     | Ok bytes when int64 bytes.Length > WorkflowHubLimits.MaxUploadBytes ->
                         PackFailed
-                            $"The finished crate is {bytes.Length} bytes, above WorkflowHub's upload limit of {WorkflowHubLimits.MaxUploadBytes} bytes."
+                            $"The finished crate is {bytes.Length} bytes, above the upload limit of {WorkflowHubLimits.MaxUploadBytes} bytes."
                     | Ok bytes -> Uploadable(bytes, int64 bytes.Length)
                 with e ->
                     PackFailed e.Message

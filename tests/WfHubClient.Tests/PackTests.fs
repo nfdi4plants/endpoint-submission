@@ -262,6 +262,17 @@ let tests =
                     | Ok _ -> ()
                     | Error message -> failtestf "a sum equal to the limit must pass, got: %s" message)
 
+            testCase "the size message counts decimal megabytes, a sum up and a limit down" <| fun () ->
+                withArc [ "a.csv" ] (fun dir ->
+                    File.WriteAllBytes(Path.Combine(dir, "a.csv"), Array.zeroCreate 1_500_001)
+                    let json = crate [ "./a.csv" ]
+
+                    match Pack.assembleZipWithLimit 1_500_000L dir json (Pack.referencedFiles json) with
+                    | Error message ->
+                        Expect.stringContains message "add up to 2 MB" "a sum of 1.500001 MB rounds up"
+                        Expect.stringContains message "at most 1 MB" "a limit of 1.5 MB rounds down"
+                    | Ok _ -> failtest "expected an error for a sum of 1,500,001 bytes and a limit of 1,500,000")
+
             testCase "fragment and URL ids produce no entries" <| fun () ->
                 withArc [ "a.csv" ] (fun dir ->
                     Expect.equal
@@ -560,5 +571,8 @@ let tests =
                 match (item "MyRun" result).Status with
                 | PackFailed message -> Expect.stringContains message "upload limit" "expected the oversize message"
                 | other -> failtestf "expected PackFailed, got %A" other
+
+            testCase "the upload cap stays below 100,000,000 bytes" <| fun () ->
+                Expect.equal WorkflowHubLimits.MaxUploadBytes 99_000_000L "expected a cap of 99,000,000 bytes"
         ]
     ]

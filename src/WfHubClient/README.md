@@ -11,7 +11,7 @@ same metadata requirements the `workflowhub` ARC validation package checks, then
 items that pass) by actually writing the RO-Crate and assembling the zip. Each item ends up
 `Uploadable` (crate zip bytes included), `NotReady` (with every failed requirement's
 explanation), or `PackFailed` (checks passed, but the crate could not be written, a referenced
-file is missing, or the zip exceeds WorkflowHub's 100 MB upload limit).
+file is missing, or the zip exceeds the upload limit of 99,000,000 bytes (`WorkflowHubLimits.MaxUploadBytes`)).
 
 ## Is my ARC depositable?
 
