@@ -29,6 +29,8 @@ public class WorkflowHubOAuthRouteTests
     private sealed class Site : IDisposable
     {
         private readonly WorkflowHubAppFactory _factory;
+        // The factory itself, or a derived one that has the forwarded headers switch on.
+        private readonly WebApplicationFactory<Program> _app;
 
         public FakeWorkflowHubGateway Gateway { get; } = new();
         public HttpClient Client { get; }
@@ -41,9 +43,12 @@ public class WorkflowHubOAuthRouteTests
 
         public Site(
             SubmissionTarget target = SubmissionTarget.Sandbox, bool allowProduction = false, string clientId = "test-client",
-            int extraItems = 0)
+            int extraItems = 0, bool forwardedHeaders = false)
         {
             _factory = new WorkflowHubAppFactory(Gateway, allowProduction, clientId);
+            _app = forwardedHeaders
+                ? _factory.WithWebHostBuilder(builder => builder.UseSetting("FORWARDEDHEADERS_ENABLED", "true"))
+                : _factory;
             Client = NewClient();
 
             var minted = new StatusTokenService().Mint();
@@ -61,7 +66,7 @@ public class WorkflowHubOAuthRouteTests
             Other = Artifact("workflows/other", [4, 5]);
             Ready = [Align, Other, .. Enumerable.Range(1, extraItems).Select(i => Artifact($"workflows/extra-{i}", [(byte)i]))];
 
-            using var scope = _factory.Services.CreateScope();
+            using var scope = _app.Services.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<SubmissionDbContext>();
             db.Submissions.Add(Submission);
             db.PreparedArtifacts.AddRange(Ready);
@@ -81,7 +86,7 @@ public class WorkflowHubOAuthRouteTests
 
         /// <summary>A client with a cookie jar of its own, like one more browser.</summary>
         public HttpClient NewClient(bool handleCookies = true)
-            => _factory.CreateClient(new WebApplicationFactoryClientOptions
+            => _app.CreateClient(new WebApplicationFactoryClientOptions
             {
                 AllowAutoRedirect = false,
                 HandleCookies = handleCookies
@@ -138,7 +143,7 @@ public class WorkflowHubOAuthRouteTests
 
         public WorkflowHubPendingFlow Unprotect(string cookieValue)
         {
-            var protector = _factory.Services.GetRequiredService<IDataProtectionProvider>()
+            var protector = _app.Services.GetRequiredService<IDataProtectionProvider>()
                 .CreateProtector(WorkflowHubFlowCookie.Purpose);
             return JsonSerializer.Deserialize<WorkflowHubPendingFlow>(protector.Unprotect(cookieValue))!;
         }
@@ -158,7 +163,7 @@ public class WorkflowHubOAuthRouteTests
         }
 
         public SubmissionDbContext NewContext()
-            => _factory.Services.CreateScope().ServiceProvider.GetRequiredService<SubmissionDbContext>();
+            => _app.Services.CreateScope().ServiceProvider.GetRequiredService<SubmissionDbContext>();
 
         public List<string> Logs()
         {
@@ -367,6 +372,24 @@ public class WorkflowHubOAuthRouteTests
         Assert.DoesNotContain(flow.CodeVerifier, Site.CookieValue(response));
         Assert.Empty(site.Gateway.Exchanges);
         await site.AssertTokenNowhere();
+    }
+
+    [Fact]
+    public async Task The_login_cookie_is_secure_when_a_TLS_proxy_forwards_the_request_as_https()
+    {
+        using var site = new Site(forwardedHeaders: true);
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/workflowhub/submissions/{site.Submission.Id}/authorize")
+        {
+            Content = new FormUrlEncodedContent(site.Form(Pick(site.Align, "private")))
+        };
+        request.Headers.Add("X-Forwarded-Proto", "https");
+
+        var response = await site.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.SeeOther, response.StatusCode);
+        var cookie = Assert.Single(response.Headers.GetValues("Set-Cookie"));
+        Assert.StartsWith(CookieName + "=", cookie);
+        Assert.Contains("secure;", cookie + ";", StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
