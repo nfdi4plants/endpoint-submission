@@ -11,7 +11,10 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
-var builder = WebApplication.CreateBuilder(args);
+// The configuration's command-line provider would read "--migrate" as a key and take the next
+// argument as its value, so the switch is removed before the builder sees the arguments.
+var migrate = args.Contains("--migrate");
+var builder = WebApplication.CreateBuilder(args.Where(a => a != "--migrate").ToArray());
 
 // Pages are plain interpolated HTML returned from minimal-API handlers (see Pages/), the way
 // AVPR does it — no Razor, no MVC, so nothing to register here beyond the API Explorer NSwag
@@ -73,6 +76,15 @@ builder.Services.AddHealthChecks()
 
 var app = builder.Build();
 
+// "--migrate" applies pending migrations and exits without starting the server. Deployments run
+// it as its own step before they start the service.
+if (migrate)
+{
+    using var migrationScope = app.Services.CreateScope();
+    migrationScope.ServiceProvider.GetRequiredService<SubmissionDbContext>().Database.Migrate();
+    return;
+}
+
 // A crash or restart can leave ARC checkouts, private repository content, in the temp folder.
 // This process has started no checkout yet, so a folder older than one preparation timeout is
 // a leftover. Tests start apps beside other processes that use the same temp folder, so they skip it.
@@ -89,9 +101,9 @@ if (app.Environment.IsDevelopment())
 {
     app.UseDeveloperExceptionPage();
 
-    // Dev only. In production, migrations are applied deliberately as a deploy step —
-    // this database is the sole record that a submission happened, so schema changes
-    // should not ride in silently on an app restart.
+    // Dev only. Other environments apply migrations as a deliberate deploy step with --migrate.
+    // This database is the sole record that a submission happened, so schema changes should not
+    // ride in silently on an app restart.
     using var scope = app.Services.CreateScope();
     scope.ServiceProvider.GetRequiredService<SubmissionDbContext>().Database.Migrate();
 }

@@ -58,7 +58,9 @@ supported service variables and safe development defaults.
 | OpenAPI | http://localhost:8081/swagger |
 | Adminer | http://localhost:8080 |
 
-Migrations are applied automatically in Development only; in production they are a deliberate deploy step.
+The service applies migrations at startup only in the Development environment. Other environments run the
+image with `--migrate` as a separate deploy step. With Compose that is
+`docker compose run --rm endpointsubmissionservice --migrate`.
 
 ```bash
 dotnet test          # unit tests, no database or network required
