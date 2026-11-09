@@ -10,6 +10,7 @@ using EndpointSubmission.Service.Pages.Handlers;
 using EndpointSubmission.Service.Services;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace EndpointSubmission.Tests;
 
@@ -162,7 +163,8 @@ public class PageRenderingTests
         Action<SubmissionDbContext, Submission>? seed = null,
         SubmissionTarget target = SubmissionTarget.Sandbox,
         string? uploaded = null, string? failed = null, string? unknown = null,
-        string? partial = null, string? skipped = null)
+        string? partial = null, string? skipped = null,
+        IOptions<EndpointSubmissionOptions>? submissionOptions = null)
     {
         var db = new SubmissionDbContext(new DbContextOptionsBuilder<SubmissionDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
@@ -179,7 +181,7 @@ public class PageRenderingTests
 
         var result = Assert.IsType<ContentHttpResult>(await WorkflowHubPreviewHandlers.Render(
             submission.Id, minted.Token, new SubmissionPageAccess(db, tokens), db, default,
-            uploaded: uploaded, failed: failed, unknown: unknown, partial: partial, skipped: skipped));
+            submissionOptions: submissionOptions, uploaded: uploaded, failed: failed, unknown: unknown, partial: partial, skipped: skipped));
         return (result.ResponseContent!, artifacts, minted.Token);
     }
 
@@ -190,8 +192,18 @@ public class PageRenderingTests
             Regex.Split(html, @"(?=<(?:li|details) class=""wfh-item)")
                 .Where(chunk => chunk.StartsWith("<li class=\"wfh-item") || chunk.StartsWith("<details class=\"wfh-item"))
                 .Where(chunk => chunk.Contains(marker)));
-        var end = item.StartsWith("<li") ? "</li>" : "</details>";
-        return item[..(item.IndexOf(end, StringComparison.Ordinal) + end.Length)];
+        if (!item.StartsWith("<li"))
+            return item[..(item.IndexOf("</details>", StringComparison.Ordinal) + "</details>".Length)];
+
+        // A ready item can hold a nested list, so the item ends at the li that closes its own.
+        var depth = 0;
+        foreach (Match tag in Regex.Matches(item, @"<li[\s>]|</li>"))
+        {
+            depth += tag.Value == "</li>" ? -1 : 1;
+            if (depth == 0) return item[..(tag.Index + tag.Length)];
+        }
+
+        throw new InvalidOperationException("The item has no closing li.");
     }
 
     private static PreparedArtifact[] OneReady(Submission s)
@@ -311,6 +323,73 @@ public class PageRenderingTests
         });
 
         Assert.Contains($@"<span class=""wfh-size"">{expected}</span>", html);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_preview_lists_the_LFS_pointer_files_of_a_ready_item_in_closed_details()
+    {
+        var (html, _, _) = await RenderWorkflowHub(s =>
+        [
+            Artifact(s, "workflow", "workflows/align", PreparedArtifactStatus.Ready, title: "Align reads",
+                metadata: """{"licenseSpdxId":"MIT","licensePresent":true,"lfsPointerFiles":["data/a.fastq","data/<b>raw</b>.fastq"]}"""),
+            Artifact(s, "run", "runs/r1", PreparedArtifactStatus.Ready, title: "Run one")
+        ]);
+
+        // The details element is part of the item and sits after its label, so opening it cannot toggle the checkbox.
+        var row = ItemWith(html, "workflows/align");
+        const string opening = @"<details class=""wfh-lfs"">";
+        Assert.True(row.IndexOf("</label>", StringComparison.Ordinal) < row.IndexOf(opening, StringComparison.Ordinal));
+
+        Assert.Contains("<summary>2 files stay Git LFS pointers</summary>", row);
+        Assert.Contains("<li><code>data/a.fastq</code></li>", row);
+        Assert.Contains("<li><code>data/&lt;b&gt;raw&lt;/b&gt;.fastq</code></li>", row);
+        Assert.DoesNotContain("<b>", row);
+
+        Assert.DoesNotContain("wfh-lfs", ItemWith(html, "runs/r1"));
+        Assert.Single(Regex.Matches(html, @"class=""wfh-lfs"""));
+    }
+
+    [Fact]
+    public async Task WorkflowHub_preview_lists_the_LFS_pointer_files_in_a_read_only_item()
+    {
+        var (html, _, _) = await RenderWorkflowHub(s =>
+            [
+                Artifact(s, "workflow", "workflows/align", PreparedArtifactStatus.Ready, title: "Align reads",
+                    metadata: """{"licenseSpdxId":"MIT","licensePresent":true,"lfsPointerFiles":["data/<i>raw</i>.csv"]}""")
+            ],
+            target: SubmissionTarget.Production,
+            submissionOptions: Options.Create(new EndpointSubmissionOptions { AllowProductionTarget = false }));
+
+        var row = ItemWith(html, "workflows/align");
+        Assert.Contains("wfh-item-readonly", row);
+        Assert.DoesNotContain(@"type=""checkbox""", row);
+        Assert.Contains(@"<details class=""wfh-lfs"">", row);
+        Assert.Contains("<summary>1 file stays a Git LFS pointer</summary>", row);
+        Assert.Contains("<li><code>data/&lt;i&gt;raw&lt;/i&gt;.csv</code></li>", row);
+    }
+
+    [Theory]
+    [InlineData("""{"licenseSpdxId":"MIT","licensePresent":true,"lfsPointerFiles":"x"}""", 0)]
+    [InlineData("not json", 0)]
+    [InlineData("""{"lfsPointerFiles":[1,"data/a.csv",null]}""", 1)]
+    public async Task WorkflowHub_preview_lists_only_the_usable_LFS_pointer_entries_of_odd_metadata(
+        string metadata, int expectedEntries)
+    {
+        var (html, _, _) = await RenderWorkflowHub(s =>
+        [
+            Artifact(s, "workflow", "workflows/align", PreparedArtifactStatus.Ready, title: "Align reads", metadata: metadata)
+        ]);
+
+        var row = ItemWith(html, "workflows/align");
+        Assert.Equal(expectedEntries, Regex.Matches(row, "<li><code>").Count);
+        if (expectedEntries == 0)
+        {
+            Assert.DoesNotContain("wfh-lfs", row);
+            return;
+        }
+
+        Assert.Contains("<summary>1 file stays a Git LFS pointer</summary>", row);
+        Assert.Contains("<li><code>data/a.csv</code></li>", row);
     }
 
     [Fact]

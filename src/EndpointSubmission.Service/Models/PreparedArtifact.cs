@@ -39,7 +39,9 @@ public class PreparedArtifact
     public string FailureReasonsJson { get; set; } = "[]";
 
     /// <summary>
-    /// Endpoint-specific details. WorkflowHub stores <c>{"licenseSpdxId": string|null, "licensePresent": bool}</c>.
+    /// Endpoint-specific details. WorkflowHub stores <c>licenseSpdxId</c> (string or null), <c>licensePresent</c>
+    /// (bool) and <c>lfsPointerFiles</c> (array of the zip paths of the LFS pointer files in the crate).
+    /// Rows written before <c>lfsPointerFiles</c> existed do not have that key.
     /// </summary>
     public string MetadataJson { get; set; } = "{}";
 

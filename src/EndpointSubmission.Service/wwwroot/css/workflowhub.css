@@ -239,6 +239,19 @@
 .wfh-item-uploaded .wfh-item-warning,
 .wfh-item-readonly .wfh-item-warning { grid-column: auto; }
 
+/* The crate entries that are still Git LFS pointer files. */
+.wfh-lfs {
+  grid-column: 2;
+  margin: 0.35rem 0 0;
+  font-size: 0.875rem;
+}
+.wfh-lfs[open] > summary { margin-bottom: 0.35rem; }
+.wfh-lfs p { margin: 0.35rem 0; color: var(--pico-muted-color); }
+.wfh-lfs ul { margin: 0; padding-inline-start: 1.25rem; }
+.wfh-lfs li { list-style: disc; overflow-wrap: anywhere; }
+/* An opened list makes the row tall. The size and visibility columns stay at the top of the row. */
+.wfh-item-ready:has(.wfh-lfs[open]) { align-items: start; }
+
 .wfh-size,
 .wfh-entry {
   color: var(--pico-muted-color);
@@ -403,6 +416,8 @@
   .wfh-size { padding-inline-start: 2rem; text-align: start; }
   .wfh-item-readonly { grid-template-columns: minmax(0, 1fr); }
   .wfh-item-readonly .wfh-size { padding-inline-start: 0; }
+  /* The list grows only the first grid row here, so the size and visibility row stays centered. */
+  .wfh-item-ready:has(.wfh-lfs[open]) { align-items: center; }
   .wfh-visibility {
     display: flex;
     align-items: center;

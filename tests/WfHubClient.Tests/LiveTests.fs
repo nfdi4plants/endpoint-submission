@@ -26,7 +26,7 @@ let private packWorkflowCrate (fixture: Fixture) =
     use written = write fixture
     let result = Pack.pack written.Directory
 
-    match result.Items |> List.tryPick (fun i -> match i.Status with Uploadable(bytes, _) -> Some bytes | _ -> None) with
+    match result.Items |> List.tryPick (fun i -> match i.Status with Uploadable(bytes, _, _) -> Some bytes | _ -> None) with
     | Some bytes -> bytes, result.LicenseSpdxId
     | None -> failtest "the fixture must produce an uploadable crate"
 
@@ -122,7 +122,7 @@ let private dataHubSettings =
 
 let private describe (status: ItemStatus) =
     match status with
-    | Uploadable(_, size) -> $"uploadable, {size} bytes"
+    | Uploadable(_, size, _) -> $"uploadable, {size} bytes"
     | NotReady failures -> $"not ready, {failures.Length} failed requirement(s)"
     | PackFailed error -> $"pack failed: {error}"
 

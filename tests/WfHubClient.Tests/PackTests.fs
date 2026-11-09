@@ -29,7 +29,7 @@ let private expectNotReady (packedItem: PackedItem) =
 
 let private crateBytes (packedItem: PackedItem) =
     match packedItem.Status with
-    | Uploadable(bytes, size) ->
+    | Uploadable(bytes, size, _) ->
         Expect.equal size (int64 bytes.Length) "reported size does not match the crate bytes"
         bytes
     | other -> failtestf "expected '%s' to be Uploadable, got %A" packedItem.Identifier other
@@ -219,7 +219,7 @@ let tests =
 
             let entryNames dir ids =
                 match assembled dir ids with
-                | Ok bytes ->
+                | Ok(bytes, _) ->
                     use zip = new ZipArchive(new MemoryStream(bytes))
                     zip.Entries |> Seq.map (fun e -> e.FullName) |> Seq.toList
                 | Error message -> failtest message
@@ -333,7 +333,7 @@ let tests =
                     let ids = [ "./d"; "./d/../ro-crate-metadata.json" ]
 
                     match assembled dir ids with
-                    | Ok bytes ->
+                    | Ok(bytes, _) ->
                         use zip = new ZipArchive(new MemoryStream(bytes))
                         let names = zip.Entries |> Seq.map (fun e -> e.FullName) |> Seq.toList
                         Expect.equal names [ "d/ro-crate-metadata.json"; "ro-crate-metadata.json" ] "entries"
@@ -493,6 +493,30 @@ let tests =
                         (entryText zip "assays/MyAssay/dataset/data.csv")
                         lfsPointerText
                         "expected the raw pointer text")
+
+                match (item "MyRun" result).Status with
+                | Uploadable(_, _, pointers) ->
+                    Expect.equal pointers [ "assays/MyAssay/dataset/data.csv" ] "expected exactly the pointer file"
+                | other -> failtestf "expected Uploadable, got %A" other
+
+            testCase "LFS pointer files are listed in ordinal order, whatever the order of hasPart" <| fun () ->
+                let result = packFixture (Fixtures.lfsPointersInFolderAndFile ())
+
+                withZip (item "MyRun" result) (fun zip ->
+                    let referenced = Pack.referencedFiles (entryText zip "ro-crate-metadata.json")
+
+                    Expect.equal
+                        (referenced |> List.filter (fun path -> path.EndsWith "/zdata" || path.EndsWith "/a.csv"))
+                        [ "assays/MyAssay/zdata"; "assays/MyAssay/dataset/a.csv" ]
+                        "the fixture needs the folder before the file in hasPart")
+
+                match (item "MyRun" result).Status with
+                | Uploadable(_, _, pointers) ->
+                    Expect.equal
+                        pointers
+                        [ "assays/MyAssay/dataset/a.csv"; "assays/MyAssay/zdata/p.csv" ]
+                        "expected both pointer files in ordinal order"
+                | other -> failtestf "expected Uploadable, got %A" other
 
             testCase "a workflow file that is still an LFS pointer makes the item fail" <| fun () ->
                 let fixture = Fixtures.validArc ()

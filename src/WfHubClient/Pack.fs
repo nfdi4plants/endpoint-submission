@@ -256,7 +256,14 @@ module Pack =
                     use stream = entry.Open()
                     stream.Write(bytes, 0, bytes.Length)
 
-            Ok(buffer.ToArray())
+            // Workflow pointers failed the item above, so these are data files outside workflows/.
+            let pointers =
+                uniqueFiles ()
+                |> List.filter (fun (_, full) -> isLfsPointer full)
+                |> List.map fst
+                |> List.sortWith (fun a b -> String.CompareOrdinal(a, b))
+
+            Ok(buffer.ToArray(), pointers)
 
     /// `assembleZipWithLimit` with the service's limit, `MaxRawCrateBytes`.
     let internal assembleZip (arcDirectory: string) (crateJson: string) (files: string list) =
@@ -280,10 +287,10 @@ module Pack =
 
                     match assembleZip arcDirectory crateJson (referencedFiles crateJson) with
                     | Error error -> PackFailed error
-                    | Ok bytes when int64 bytes.Length > WorkflowHubLimits.MaxUploadBytes ->
+                    | Ok(bytes, _) when int64 bytes.Length > WorkflowHubLimits.MaxUploadBytes ->
                         PackFailed
                             $"The finished crate is {bytes.Length} bytes, above the upload limit of {WorkflowHubLimits.MaxUploadBytes} bytes."
-                    | Ok bytes -> Uploadable(bytes, int64 bytes.Length)
+                    | Ok(bytes, pointers) -> Uploadable(bytes, int64 bytes.Length, pointers)
                 with e ->
                     PackFailed e.Message
 

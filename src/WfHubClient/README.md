@@ -31,7 +31,7 @@ if result.License.IsNone then
 
 for item in result.Items do
     match item.Status with
-    | Uploadable(_, size) -> printfn "%s: ready (%d bytes)" item.Identifier size
+    | Uploadable(_, size, _) -> printfn "%s: ready (%d bytes)" item.Identifier size
     | NotReady failures -> printfn "%s: not ready\n  - %s" item.Identifier (String.concat "\n  - " failures)
     | PackFailed error -> printfn "%s: packing failed: %s" item.Identifier error
 ```
@@ -41,7 +41,9 @@ for item in result.Items do
 `DataHubGit` (in `src/DataHubGit`, see its README) checks an ARC out of a DataHUB with git, and
 `Pack.WorkflowHubLfsInclude` (`workflows/**`) is the include list to pass it for WorkflowHub crates.
 `Pack` reports an item as `PackFailed` when it would ship a file under `workflows/` or a `.cwl`
-file that is still a pointer.
+file that is still a pointer. For an `Uploadable` item, the third field lists the crate entries
+that are still pointers (data files outside `workflows/`), so a caller can show the user which
+files ship as pointer text.
 
 ```fsharp
 #r "nuget: ARCtrl, 3.3.0"
@@ -70,7 +72,7 @@ let result = Pack.pack checkout.Directory
 
 for item in result.Items do
     match item.Status with
-    | Uploadable(_, size) -> printfn "%s: ready (%d bytes)" item.Identifier size
+    | Uploadable(_, size, _) -> printfn "%s: ready (%d bytes)" item.Identifier size
     | NotReady failures -> printfn "%s: not ready (%d problems)" item.Identifier failures.Length
     | PackFailed error -> printfn "%s: packing failed: %s" item.Identifier error
 ```

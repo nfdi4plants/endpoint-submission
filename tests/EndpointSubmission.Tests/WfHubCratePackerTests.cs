@@ -44,7 +44,7 @@ public class WfHubCratePackerTests
         var packed = new PackResult(
             ListModule.OfArray(new[]
             {
-                Item("workflows/align", ItemKind.Workflow, "Align reads", ItemStatus.NewUploadable(crate, 3L)),
+                Item("workflows/align", ItemKind.Workflow, "Align reads", ItemStatus.NewUploadable(crate, 3L, Strings("data/a.fastq", "data/b.csv"))),
                 Item("runs/r1", ItemKind.Run, null, ItemStatus.NewNotReady(Strings("No outputs.", "No inputs."))),
                 Item("runs/r2", ItemKind.Run, null, ItemStatus.NewPackFailed("Zip assembly failed."))
             }),
@@ -63,17 +63,20 @@ public class WfHubCratePackerTests
         Assert.Equal(PreparedWorkflowItemStatus.Uploadable, uploadable.Status);
         Assert.Equal(crate, uploadable.Crate);
         Assert.Empty(uploadable.Failures);
+        Assert.Equal(new[] { "data/a.fastq", "data/b.csv" }, uploadable.LfsPointerFiles);
 
         var notReady = preparation.Items[1];
         Assert.Equal("run", notReady.Kind);
         Assert.Equal(PreparedWorkflowItemStatus.NotReady, notReady.Status);
         Assert.Equal(new[] { "No outputs.", "No inputs." }, notReady.Failures);
         Assert.Null(notReady.Crate);
+        Assert.Empty(notReady.LfsPointerFiles);
 
         var packFailed = preparation.Items[2];
         Assert.Equal(PreparedWorkflowItemStatus.PackFailed, packFailed.Status);
         Assert.Equal(new[] { "Zip assembly failed." }, packFailed.Failures);
         Assert.Null(packFailed.Crate);
+        Assert.Empty(packFailed.LfsPointerFiles);
     }
 
     [Fact]

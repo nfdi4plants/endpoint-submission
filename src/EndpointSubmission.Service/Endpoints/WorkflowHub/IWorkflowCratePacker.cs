@@ -26,6 +26,7 @@ public sealed record WorkflowPreparation(
 /// <param name="Kind">"workflow" or "run".</param>
 /// <param name="Failures">Reasons the item is not uploadable. Empty for Uploadable items.</param>
 /// <param name="Crate">The zip to upload. Set for Uploadable items only.</param>
+/// <param name="LfsPointerFiles">Zip paths of crate entries that are Git LFS pointer files. Empty unless the item is Uploadable.</param>
 public sealed record PreparedWorkflowItem(
     string Kind,
     string Identifier,
@@ -33,7 +34,8 @@ public sealed record PreparedWorkflowItem(
     string? Description,
     PreparedWorkflowItemStatus Status,
     IReadOnlyList<string> Failures,
-    byte[]? Crate);
+    byte[]? Crate,
+    IReadOnlyList<string> LfsPointerFiles);
 
 public enum PreparedWorkflowItemStatus
 {

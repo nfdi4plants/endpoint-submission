@@ -190,14 +190,15 @@ public class WorkflowHubSubmissionHandler(
 
     private static List<PreparedArtifact> ToArtifacts(Guid submissionId, WorkflowPreparation preparation, string token)
     {
-        var metadata = JsonSerializer.Serialize(new
-        {
-            licenseSpdxId = Redact(preparation.LicenseSpdxId, token),
-            licensePresent = preparation.LicensePresent
-        });
-
         return preparation.Items.Select(item =>
         {
+            var metadata = JsonSerializer.Serialize(new
+            {
+                licenseSpdxId = Redact(preparation.LicenseSpdxId, token),
+                licensePresent = preparation.LicensePresent,
+                lfsPointerFiles = item.LfsPointerFiles.Select(f => Redact(f, token)).ToList()
+            });
+
             var artifact = new PreparedArtifact
             {
                 SubmissionId = submissionId,

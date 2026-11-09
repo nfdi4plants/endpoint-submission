@@ -442,13 +442,14 @@ public static class WorkflowHubPreviewHandlers
         ArtifactRow a, WorkflowHubFormState? state, string instanceBase, bool uploadAllowed, bool caution)
     {
         var cautionClass = caution ? " wfh-item-caution" : "";
+        var lfsPointers = LfsPointerDetails(a);
 
         if (!uploadAllowed)
         {
             var note = caution ? CautionLine(instanceBase) : "";
             return $@"
               <li class=""wfh-item wfh-item-ready wfh-item-readonly{cautionClass}"">
-                <div class=""wfh-pick"">{Describe(a)}{note}</div>
+                <div class=""wfh-pick"">{Describe(a)}{note}{lfsPointers}</div>
                 <span class=""wfh-size"">{Size(a.SizeBytes)}</span>
               </li>";
         }
@@ -461,7 +462,7 @@ public static class WorkflowHubPreviewHandlers
               <li class=""wfh-item wfh-item-ready{cautionClass}"">
                 <div class=""wfh-pick"">
                   <input type=""checkbox"" id=""item-{id}"" name=""item"" value=""{id}""{(caution ? $@" aria-describedby=""caution-{id}"" data-wfh-caution" : "")}{(isChecked ? " checked" : "")}>
-                  <label for=""item-{id}"">{Describe(a)}</label>{warning}
+                  <label for=""item-{id}"">{Describe(a)}</label>{warning}{lfsPointers}
                 </div>
                 <span class=""wfh-size"">{Size(a.SizeBytes)}</span>
                 <div class=""wfh-visibility"">
@@ -472,6 +473,45 @@ public static class WorkflowHubPreviewHandlers
                   </select>
                 </div>
               </li>";
+    }
+
+    /// <summary>The zip paths of the crate's LFS pointer files. Rows from before the list existed give an empty list.</summary>
+    private static List<string> LfsPointerFiles(string metadataJson)
+    {
+        var files = new List<string>();
+        try
+        {
+            using var metadata = JsonDocument.Parse(metadataJson);
+            if (metadata.RootElement.ValueKind == JsonValueKind.Object
+                && metadata.RootElement.TryGetProperty("lfsPointerFiles", out var list)
+                && list.ValueKind == JsonValueKind.Array)
+            {
+                files.AddRange(list.EnumerateArray()
+                    .Where(e => e.ValueKind == JsonValueKind.String)
+                    .Select(e => e.GetString()!));
+            }
+        }
+        catch (JsonException)
+        {
+            // Unreadable metadata shows no list.
+        }
+
+        return files;
+    }
+
+    /// <summary>A closed details element that names the crate's LFS pointer files. It sits outside the item's label, so opening it does not toggle the checkbox.</summary>
+    private static string LfsPointerDetails(ArtifactRow a)
+    {
+        var files = LfsPointerFiles(a.MetadataJson);
+        if (files.Count == 0) return "";
+
+        var summary = Plural(files.Count, "file stays a Git LFS pointer", "files stay Git LFS pointers");
+        return $@"
+                  <details class=""wfh-lfs"">
+                    <summary>{summary}</summary>
+                    <p>The crate holds the pointer text of these files. The full files stay in the ARC on the DataHUB.</p>
+                    <ul>{string.Concat(files.Select(f => $"<li><code>{Html.Text(f)}</code></li>"))}</ul>
+                  </details>";
     }
 
     /// <summary>The warning under an item that an earlier upload may have put on WorkflowHub already.</summary>

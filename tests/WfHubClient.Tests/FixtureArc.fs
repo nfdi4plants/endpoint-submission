@@ -340,6 +340,35 @@ module Fixtures =
                     else
                         path, content) }
 
+    /// Two LFS pointer data files in the run's table, the folder `assays/MyAssay/zdata` first and
+    /// the file `assays/MyAssay/dataset/a.csv` second. The crate's hasPart lists them in that
+    /// order, which is not ordinal, and one pointer is reached through its folder.
+    let lfsPointersInFolderAndFile () =
+        let fixture = baseline ()
+        let table = ArcTable.init "Process"
+
+        table.AddColumn(
+            CompositeHeader.Input IOType.Data,
+            ResizeArray
+                [ CompositeCell.createData (Data(name = "assays/MyAssay/zdata"))
+                  CompositeCell.createData (Data(name = "assays/MyAssay/dataset/a.csv")) ]
+        )
+
+        table.AddColumn(
+            CompositeHeader.Output IOType.Data,
+            ResizeArray
+                [ CompositeCell.createData (Data(name = "runs/MyRun/result.csv"))
+                  CompositeCell.createData (Data(name = "runs/MyRun/result.csv")) ]
+        )
+
+        fixture.Runs.Head.Tables <- ResizeArray [ table ]
+
+        { fixture with
+            ExtraFiles =
+                fixture.ExtraFiles
+                @ [ "assays/MyAssay/zdata/p.csv", lfsPointerText
+                    "assays/MyAssay/dataset/a.csv", lfsPointerText ] }
+
     let mixedArc () =
         let secondWorkflow =
             ArcWorkflow(

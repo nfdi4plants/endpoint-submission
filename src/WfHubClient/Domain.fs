@@ -11,7 +11,10 @@ type ItemStatus =
     /// Checks passed; crate write / zip assembly failed, or the finished crate
     /// exceeds the upload size limit.
     | PackFailed of error: string
-    | Uploadable of crate: byte[] * size: int64
+    /// Checks passed and the zip fits the upload limit. `lfsPointers` holds the zip paths of the
+    /// crate entries that are Git LFS pointer files, in ordinal order. Workflow files never
+    /// appear in it, because a workflow file that is a pointer makes the item `PackFailed`.
+    | Uploadable of crate: byte[] * size: int64 * lfsPointers: string list
 
 type PackedItem =
     { Identifier: string

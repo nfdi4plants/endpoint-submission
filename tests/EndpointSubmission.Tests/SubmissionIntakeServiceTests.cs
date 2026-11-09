@@ -453,11 +453,12 @@ public class SubmissionIntakeServiceTests
     private static WorkflowPreparation MixedPreparation() => new(
         [
             new("workflow", "workflows/align", "Align reads", "Aligns reads.",
-                PreparedWorkflowItemStatus.Uploadable, [], Encoding.UTF8.GetBytes("PK crate bytes")),
+                PreparedWorkflowItemStatus.Uploadable, [], Encoding.UTF8.GetBytes("PK crate bytes"),
+                ["data/reads.fastq", "data/table.csv"]),
             new("run", "runs/r1", "Run one", null,
-                PreparedWorkflowItemStatus.NotReady, ["The run has no outputs."], null),
+                PreparedWorkflowItemStatus.NotReady, ["The run has no outputs."], null, []),
             new("run", "runs/r2", null, null,
-                PreparedWorkflowItemStatus.PackFailed, ["Zip assembly failed."], null)
+                PreparedWorkflowItemStatus.PackFailed, ["Zip assembly failed."], null, [])
         ],
         LicenseSpdxId: "MIT", LicensePresent: true, Error: null);
 
@@ -492,9 +493,12 @@ public class SubmissionIntakeServiceTests
         Assert.Equal(crate, ready.Content);
         Assert.Equal(crate.Length, ready.SizeBytes);
         Assert.Equal(Convert.ToHexString(SHA256.HashData(crate)).ToLowerInvariant(), ready.ContentSha256);
-        Assert.Equal("""{"licenseSpdxId":"MIT","licensePresent":true}""", ready.MetadataJson);
+        Assert.Equal(
+            """{"licenseSpdxId":"MIT","licensePresent":true,"lfsPointerFiles":["data/reads.fastq","data/table.csv"]}""",
+            ready.MetadataJson);
 
         var notReady = Assert.Single(artifacts, a => a.ItemIdentifier == "runs/r1");
+        Assert.Equal("""{"licenseSpdxId":"MIT","licensePresent":true,"lfsPointerFiles":[]}""", notReady.MetadataJson);
         Assert.Equal("run", notReady.ItemKind);
         Assert.Equal(PreparedArtifactStatus.NotReady, notReady.Status);
         Assert.Equal("""["The run has no outputs."]""", notReady.FailureReasonsJson);
@@ -627,7 +631,7 @@ public class SubmissionIntakeServiceTests
         packer.Result = new WorkflowPreparation(
             [
                 new($"run-{Pat}", $"runs/{Pat}", $"Title {Pat}", $"Description {Pat}",
-                    PreparedWorkflowItemStatus.NotReady, [$"Reason {Pat}"], null)
+                    PreparedWorkflowItemStatus.NotReady, [$"Reason {Pat}"], null, [$"data/{Pat}.fastq"])
             ],
             LicenseSpdxId: $"MIT-{Pat}", LicensePresent: true, Error: null);
 
@@ -637,6 +641,7 @@ public class SubmissionIntakeServiceTests
         var artifact = Assert.Single(stored.PreparedArtifacts);
         Assert.Equal("Title [REDACTED]", artifact.Title);
         Assert.Equal("""["Reason [REDACTED]"]""", artifact.FailureReasonsJson);
+        Assert.Contains("""["data/[REDACTED].fastq"]""", artifact.MetadataJson);
         Assert.All(StoredStrings(stored), s => Assert.DoesNotContain(Pat, s ?? ""));
     }
 
@@ -647,7 +652,7 @@ public class SubmissionIntakeServiceTests
         packer.Result = new WorkflowPreparation(
             [
                 new(new string('k', 100), new string('i', 300), new string('t', 2000), null,
-                    PreparedWorkflowItemStatus.NotReady, [], null)
+                    PreparedWorkflowItemStatus.NotReady, [], null, [])
             ],
             LicenseSpdxId: null, LicensePresent: true, Error: null);
 

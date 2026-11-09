@@ -98,13 +98,13 @@ public sealed class WfHubCratePacker(IOptions<WorkflowHubOptions> options) : IWo
         {
             ItemStatus.Uploadable uploadable => new PreparedWorkflowItem(
                 kind, item.Identifier, title, description,
-                PreparedWorkflowItemStatus.Uploadable, [], uploadable.crate),
+                PreparedWorkflowItemStatus.Uploadable, [], uploadable.crate, uploadable.lfsPointers.ToList()),
             ItemStatus.NotReady notReady => new PreparedWorkflowItem(
                 kind, item.Identifier, title, description,
-                PreparedWorkflowItemStatus.NotReady, notReady.failures.ToList(), null),
+                PreparedWorkflowItemStatus.NotReady, notReady.failures.ToList(), null, []),
             ItemStatus.PackFailed packFailed => new PreparedWorkflowItem(
                 kind, item.Identifier, title, description,
-                PreparedWorkflowItemStatus.PackFailed, [packFailed.error], null),
+                PreparedWorkflowItemStatus.PackFailed, [packFailed.error], null, []),
             _ => throw new InvalidOperationException("Unknown pack status.")
         };
     }
