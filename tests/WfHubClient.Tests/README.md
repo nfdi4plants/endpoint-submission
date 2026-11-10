@@ -63,7 +63,7 @@ directories. The check is manual. Run it after changing `Requirements.fs`, `Read
    root; keep it outside the repo):
 
    ```fsharp
-   #r "nuget: ARCtrl, 3.3.0"
+   #r "nuget: ARCtrl, 3.3.1"
    #r @"src/WfHubClient/bin/Debug/net8.0/WfHubClient.dll"
    #r @"tests/WfHubClient.Tests/bin/Debug/net8.0/WfHubClient.Tests.dll"
    open WfHubClient.Tests.FixtureArc

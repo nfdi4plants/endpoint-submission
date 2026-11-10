@@ -19,7 +19,7 @@ Build once (`dotnet build -c Release`), save this as `check.fsx` in the reposito
 `#r` path resolves relative to the script), and run `dotnet fsi check.fsx`:
 
 ```fsharp
-#r "nuget: ARCtrl, 3.3.0"
+#r "nuget: ARCtrl, 3.3.1"
 #r "src/WfHubClient/bin/Release/net8.0/WfHubClient.dll"
 open WfHubClient
 
@@ -46,7 +46,7 @@ that are still pointers (data files outside `workflows/`), so a caller can show 
 files ship as pointer text.
 
 ```fsharp
-#r "nuget: ARCtrl, 3.3.0"
+#r "nuget: ARCtrl, 3.3.1"
 #r "src/DataHubGit/bin/Release/net8.0/DataHubGit.dll"
 #r "src/WfHubClient/bin/Release/net8.0/WfHubClient.dll"
 open System

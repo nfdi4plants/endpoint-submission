@@ -21,8 +21,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="ARCtrl" Version="[3.3.0]" />
-    <!-- ARCtrl 3.3.0 needs FSharp.Core 10.1.302 or newer. Older .NET 10 SDK bands bring an older
+    <PackageReference Include="ARCtrl" Version="[3.3.1]" />
+    <!-- ARCtrl 3.3.1 needs FSharp.Core 10.1.302 or newer. Older .NET 10 SDK bands bring an older
          implicit FSharp.Core, and restore then warns about the downgrade (NU1605). -->
     <PackageReference Update="FSharp.Core" Version="10.1.302" />
   </ItemGroup>
