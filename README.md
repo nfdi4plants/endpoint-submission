@@ -100,6 +100,7 @@ client id of the application:
 |---|---|---|
 | `WorkflowHub__Sandbox__ClientId` | empty | Client id on `dev.workflowhub.eu`. Empty turns the upload login off for sandbox submissions. |
 | `WorkflowHub__Production__ClientId` | empty | Client id on `workflowhub.eu`. Production submissions also need `AllowProductionTarget`. |
+| `WorkflowHub__ProductionDataHubHosts__0` | empty | A DataHUB host (add `__1`, `__2` for more) whose hooks go to production when they name no target. Hooks that name a target keep it. Production submissions also need `AllowProductionTarget`. |
 | `WorkflowHub__OAuthFlowMinutes` | `10` | How long the user may take on WorkflowHub (1 to 60). |
 
 The service keeps the pending login in the cookie `wfh_oauth`. The cookie is encrypted with a key ring
@@ -125,6 +126,8 @@ fail closed when `HookSharedSecret` is absent.
   actually requested is one this service constructed, not a string the caller handed it. Without that it
   would be a server-side request forgery primitive holding a token.
 - **Production requires two independent opt-ins** — deployment configuration *and* package payload.
+  For WorkflowHub, a DataHUB host listed in `WorkflowHub__ProductionDataHubHosts` counts as the request
+  for production when the hook names no target, and `AllowProductionTarget` is still required.
   Submission mints permanent public identifiers that cannot be withdrawn.
 - **The database is the only record that a submission happened.** Nothing is written back to the ARC, so
   backup and retention are correctness requirements, not ops hygiene.

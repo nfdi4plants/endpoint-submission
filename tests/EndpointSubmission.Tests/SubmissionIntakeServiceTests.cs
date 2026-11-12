@@ -116,7 +116,10 @@ public class SubmissionIntakeServiceTests
     }
 
     private static (WorkflowHubSubmissionHandler Service, SubmissionDbContext Db, FakeDataHub Hub, FakeCratePacker Packer)
-        BuildWorkflowHub(ILogger<WorkflowHubSubmissionHandler>? logger = null, WorkflowHubOptions? workflowHubOptions = null)
+        BuildWorkflowHub(
+            ILogger<WorkflowHubSubmissionHandler>? logger = null,
+            WorkflowHubOptions? workflowHubOptions = null,
+            bool allowProduction = false)
     {
         var db = new SubmissionDbContext(new DbContextOptionsBuilder<SubmissionDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
@@ -124,6 +127,7 @@ public class SubmissionIntakeServiceTests
         var options = Options.Create(new EndpointSubmissionOptions
         {
             AllowedDataHubHosts = ["gitdev.nfdi4plants.org"],
+            AllowProductionTarget = allowProduction,
             PublicBaseUrl = "https://submit.example.org",
             HookMaxAgeSeconds = 300,
             HookSharedSecret = "secret"
@@ -186,6 +190,139 @@ public class SubmissionIntakeServiceTests
         Assert.Equal("workflowhub", stored.Endpoint);
         Assert.Equal(hub.RoCrate, stored.RoCrateJson);
         Assert.Equal(3, hub.TokensSeen.Count);
+    }
+
+    /// <summary>A hook whose package_payload is the given JSON. Null leaves the property out of the envelope.</summary>
+    private static HookRequest HookWithPayloadJson(string? payloadJson, string? roCrateUrl = RoCrateUrl)
+    {
+        var request = Hook(roCrateUrl: roCrateUrl);
+        if (payloadJson is null)
+        {
+            request.PackagePayload = default;
+        }
+        else
+        {
+            using var document = JsonDocument.Parse(payloadJson);
+            request.PackagePayload = document.RootElement.Clone();
+        }
+        return request;
+    }
+
+    private static WorkflowHubOptions ProductionHosts(params string[] hosts) =>
+        new() { ProductionDataHubHosts = [.. hosts] };
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("null")]
+    [InlineData("{}")]
+    [InlineData("""{"contract_version":1}""")]
+    [InlineData("""{"target":null}""")]
+    [InlineData("""{"target":""}""")]
+    [InlineData("""{"target":"   "}""")]
+    public async Task WorkflowHub_hook_without_a_target_goes_to_production_for_a_listed_host(string? payloadJson)
+    {
+        var (service, db, _, _) = BuildWorkflowHub(
+            workflowHubOptions: ProductionHosts("gitdev.nfdi4plants.org"), allowProduction: true);
+
+        Assert.IsType<IntakeResult.Accepted>(await service.HandleAsync(HookWithPayloadJson(payloadJson), default));
+
+        Assert.Equal(SubmissionTarget.Production, (await db.Submissions.SingleAsync()).Target);
+    }
+
+    [Theory]
+    [InlineData("GITDEV.NFDI4PLANTS.ORG", "gitdev.nfdi4plants.org")]
+    [InlineData("  gitdev.nfdi4plants.org  ", "gitdev.nfdi4plants.org")]
+    [InlineData("gitdev.nfdi4plants.org", "GitDev.NFDI4Plants.org")]
+    public async Task WorkflowHub_production_host_match_ignores_case_and_surrounding_whitespace(
+        string configuredHost, string hookHost)
+    {
+        var (service, db, _, _) = BuildWorkflowHub(
+            workflowHubOptions: ProductionHosts(configuredHost), allowProduction: true);
+        var roCrateUrl = RoCrateUrl.Replace("gitdev.nfdi4plants.org", hookHost);
+
+        Assert.IsType<IntakeResult.Accepted>(
+            await service.HandleAsync(HookWithPayloadJson(null, roCrateUrl), default));
+
+        Assert.Equal(SubmissionTarget.Production, (await db.Submissions.SingleAsync()).Target);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_hook_without_a_target_goes_to_sandbox_for_a_host_that_is_not_listed()
+    {
+        // The switch is on, so the list alone decides.
+        var (service, db, _, _) = BuildWorkflowHub(
+            workflowHubOptions: ProductionHosts("git.nfdi4plants.org"), allowProduction: true);
+
+        Assert.IsType<IntakeResult.Accepted>(await service.HandleAsync(HookWithPayloadJson(null), default));
+
+        Assert.Equal(SubmissionTarget.Sandbox, (await db.Submissions.SingleAsync()).Target);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_hook_without_a_target_goes_to_sandbox_when_no_host_is_listed()
+    {
+        var (service, db, _, _) = BuildWorkflowHub(allowProduction: true);
+
+        Assert.IsType<IntakeResult.Accepted>(await service.HandleAsync(HookWithPayloadJson(null), default));
+
+        Assert.Equal(SubmissionTarget.Sandbox, (await db.Submissions.SingleAsync()).Target);
+    }
+
+    [Theory]
+    [InlineData("sandbox")]
+    [InlineData(" Sandbox ")]
+    public async Task WorkflowHub_hook_that_names_sandbox_stays_in_sandbox_for_a_listed_host(string target)
+    {
+        var (service, db, _, _) = BuildWorkflowHub(
+            workflowHubOptions: ProductionHosts("gitdev.nfdi4plants.org"), allowProduction: true);
+
+        Assert.IsType<IntakeResult.Accepted>(
+            await service.HandleAsync(Hook(new { target, contract_version = 1 }), default));
+
+        Assert.Equal(SubmissionTarget.Sandbox, (await db.Submissions.SingleAsync()).Target);
+    }
+
+    [Theory]
+    [InlineData("production")]
+    [InlineData(" Production ")]
+    public async Task WorkflowHub_hook_that_names_production_goes_to_production_for_a_host_that_is_not_listed(
+        string target)
+    {
+        var (service, db, _, _) = BuildWorkflowHub(
+            workflowHubOptions: ProductionHosts("git.nfdi4plants.org"), allowProduction: true);
+
+        Assert.IsType<IntakeResult.Accepted>(
+            await service.HandleAsync(Hook(new { target, contract_version = 1 }), default));
+
+        Assert.Equal(SubmissionTarget.Production, (await db.Submissions.SingleAsync()).Target);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_hook_without_a_target_for_a_listed_host_is_refused_while_production_is_off()
+    {
+        var (service, db, hub, packer) = BuildWorkflowHub(
+            workflowHubOptions: ProductionHosts("gitdev.nfdi4plants.org"), allowProduction: false);
+
+        var result = Assert.IsType<IntakeResult.Rejected>(
+            await service.HandleAsync(HookWithPayloadJson(null), default));
+
+        Assert.Contains("not configured to submit to production", result.Reason);
+        Assert.Empty(await db.Submissions.ToListAsync());
+        Assert.Empty(hub.TokensSeen);
+        Assert.Empty(packer.TokensSeen);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_hook_with_an_unknown_target_is_rejected_for_a_listed_host()
+    {
+        var (service, db, _, _) = BuildWorkflowHub(
+            workflowHubOptions: ProductionHosts("gitdev.nfdi4plants.org"), allowProduction: true);
+
+        var result = Assert.IsType<IntakeResult.Rejected>(
+            await service.HandleAsync(Hook(new { target = "prod" }), default));
+
+        Assert.Contains("Unknown target", result.Reason);
+        Assert.Empty(await db.Submissions.ToListAsync());
     }
 
     [Fact]

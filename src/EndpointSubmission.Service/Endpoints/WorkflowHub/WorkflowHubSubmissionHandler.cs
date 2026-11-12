@@ -52,9 +52,19 @@ public class WorkflowHubSubmissionHandler(
         if (payload.ContractVersion != 1)
             return new IntakeResult.Rejected($"Unsupported package_payload contract_version {payload.ContractVersion}.");
 
-        var target = ParseTarget(payload.Target);
-        if (target is null)
-            return new IntakeResult.Rejected($"Unknown target '{payload.Target}'. Expected 'sandbox' or 'production'.");
+        SubmissionTarget? target;
+        if (string.IsNullOrWhiteSpace(payload.Target))
+        {
+            // The hook names no target, so the deployment decides. Production still has to pass
+            // the AllowProductionTarget check in the intake.
+            target = IsProductionHost(request) ? SubmissionTarget.Production : SubmissionTarget.Sandbox;
+        }
+        else
+        {
+            target = ParseTarget(payload.Target);
+            if (target is null)
+                return new IntakeResult.Rejected($"Unknown target '{payload.Target}'. Expected 'sandbox' or 'production'.");
+        }
 
         // Preparation holds this request open for minutes. A second click for the same project
         // waits here, so its intake issues the link the user ends up with and it finds the
@@ -71,11 +81,19 @@ public class WorkflowHubSubmissionHandler(
     }
 
     private static string LockKey(HookRequest request)
+        => (DataHubHost(request) ?? request.RoCrateUrl ?? "").ToLowerInvariant() + "|" + request.ProjectId;
+
+    /// <summary>The host of ro_crate_url, or null when it is missing or not an absolute URL.</summary>
+    private static string? DataHubHost(HookRequest request)
+        => Uri.TryCreate(request.RoCrateUrl, UriKind.Absolute, out var uri) ? uri.Host : null;
+
+    /// <summary>Whether the DataHUB host of the hook is listed in ProductionDataHubHosts. Case does not matter.</summary>
+    private bool IsProductionHost(HookRequest request)
     {
-        var host = Uri.TryCreate(request.RoCrateUrl, UriKind.Absolute, out var uri)
-            ? uri.Host
-            : request.RoCrateUrl ?? "";
-        return host.ToLowerInvariant() + "|" + request.ProjectId;
+        var host = DataHubHost(request);
+        return !string.IsNullOrEmpty(host)
+            && _options.ProductionDataHubHosts.Any(
+                h => string.Equals(h?.Trim(), host, StringComparison.OrdinalIgnoreCase));
     }
 
     private async Task PrepareAsync(Submission submission, string token, CancellationToken ct)
@@ -247,15 +265,16 @@ public class WorkflowHubSubmissionHandler(
     private static SubmissionTarget? ParseTarget(string? target) => target?.Trim().ToLowerInvariant() switch
     {
         "production" => SubmissionTarget.Production,
-        "sandbox" or null or "" => SubmissionTarget.Sandbox,
+        "sandbox" => SubmissionTarget.Sandbox,
         _ => null
     };
 }
 
 public class WorkflowHubPackagePayload
 {
+    /// <summary>Null when the hook names no target.</summary>
     [JsonPropertyName("target")]
-    public string Target { get; set; } = "sandbox";
+    public string? Target { get; set; }
 
     [JsonPropertyName("contract_version")]
     public int ContractVersion { get; set; } = 1;

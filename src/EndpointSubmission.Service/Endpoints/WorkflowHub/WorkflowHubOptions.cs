@@ -21,6 +21,12 @@ public class WorkflowHubOptions
     [Range(1, 60)]
     public int OAuthFlowMinutes { get; set; } = 10;
 
+    /// <summary>
+    /// DataHUB hosts whose hooks go to production when they name no target. Hooks that name a target
+    /// keep it. The production target still needs EndpointSubmission:AllowProductionTarget.
+    /// </summary>
+    public List<string> ProductionDataHubHosts { get; set; } = [];
+
     /// <summary>The WorkflowHub test instance, used by submissions with target "sandbox".</summary>
     public WorkflowHubInstanceOptions Sandbox { get; set; } = new() { BaseUrl = "https://dev.workflowhub.eu" };
 

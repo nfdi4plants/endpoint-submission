@@ -85,7 +85,7 @@ The WorkflowHub contract is intentionally minimal until its useful preview field
 | Field | Default | Notes |
 |---|---|---|
 | `contract_version` | `1` | Anything other than `1` is rejected. |
-| `target` | `"sandbox"` | `"sandbox"` or `"production"`; production also requires deployment opt-in. |
+| `target` | none | `"sandbox"` or `"production"`; production also requires deployment opt-in. Unknown values are rejected. Without a target the deployment decides: sandbox, unless the DataHUB host of `ro_crate_url` is listed in `WorkflowHub__ProductionDataHubHosts`. |
 
 The WorkflowHub hook checks the ARC out and packs the crates inside the request. The response arrives after
 that work. `WorkflowHub__PreparationTimeoutSeconds` (default 180) limits the checkout, and packing then
@@ -121,8 +121,10 @@ and target returns the *same* submission with a freshly minted status link. The 
 working. This is deliberate: a user who loses their status link gets it back by clicking the badge again.
 
 **Production requires two independent opt-ins.** The payload must ask for it *and* the deployment must be
-configured to allow it. Submission mints permanent public identifiers, so a single misconfiguration must
-not be able to cause one.
+configured to allow it. For WorkflowHub, a DataHUB host listed in `WorkflowHub__ProductionDataHubHosts` counts
+as the request when the hook names no target, and `EndpointSubmission__AllowProductionTarget` is still
+required. Submission mints permanent public identifiers, so a single misconfiguration must not be able to
+cause one.
 
 **Caller authentication is a shared secret, deliberately.** Outside the `Development` environment,
 `X-Hook-Secret` is required and the service refuses to serve the hook when none is configured rather than
