@@ -1111,4 +1111,58 @@ public class PageRenderingTests
         Assert.Contains($"""name="mode-{artifacts[0].Id}" value="version">""", html);
         Assert.Contains($"""name="mode-{artifacts[0].Id}" value="new" checked>""", html);
     }
+
+    [Fact]
+    public async Task WorkflowHub_preview_remembers_the_shown_entry_of_every_selectable_item_inside_the_form()
+    {
+        var (html, artifacts, _) = await RenderWorkflowHub(
+            AlignAndOther, (db, _) => AddEarlierEntry(db, "workflows/align", "42", "3"));
+
+        Assert.Contains(
+            $"""<input type="hidden" name="entry-{artifacts[0].Id}" value="42">""", ItemWith(html, "workflows/align"));
+        Assert.Contains(
+            $"""<input type="hidden" name="entry-{artifacts[1].Id}" value="">""", ItemWith(html, "workflows/other"));
+
+        var form = html[html.IndexOf("<form", StringComparison.Ordinal)..html.IndexOf("</form>", StringComparison.Ordinal)];
+        Assert.Equal(2, Regex.Matches(form, @"name=""entry-").Count);
+        Assert.Equal(2, Regex.Matches(html, @"name=""entry-").Count);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_preview_has_no_entry_fields_when_the_items_are_read_only()
+    {
+        var (html, _, _) = await RenderWorkflowHub(
+            AlignAndOther,
+            (db, _) => AddEarlierEntry(db, "workflows/align", "42", "3", e => e.Target = SubmissionTarget.Production),
+            target: SubmissionTarget.Production,
+            submissionOptions: Options.Create(new EndpointSubmissionOptions { AllowProductionTarget = false }));
+
+        Assert.DoesNotContain("<form", html);
+        Assert.DoesNotContain("name=\"entry-", html);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_preview_shows_the_current_entry_in_the_hidden_field_also_when_the_form_comes_back()
+    {
+        var db = new SubmissionDbContext(new DbContextOptionsBuilder<SubmissionDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options);
+        var submission = Submission("workflowhub", "arc", "hash");
+        var artifacts = AlignAndOther(submission);
+        db.Submissions.Add(submission);
+        db.PreparedArtifacts.AddRange(artifacts);
+        AddEarlierEntry(db, "workflows/align", "55", "3");
+        await db.SaveChangesAsync();
+        // The user had ticked both items, chose a new entry for the first one and left the second on private.
+        var state = new WorkflowHubFormState(
+            new HashSet<Guid> { artifacts[0].Id, artifacts[1].Id }, new Dictionary<Guid, bool>(), null, null,
+            new HashSet<Guid> { artifacts[0].Id });
+
+        var html = await WorkflowHubPreviewHandlers.RenderViewAsync(
+            db, submission, "token", "https://dev.workflowhub.eu", "", default, state);
+
+        Assert.Contains($"""<input type="hidden" name="entry-{artifacts[0].Id}" value="55">""", html);
+        Assert.Contains($"""<input type="hidden" name="entry-{artifacts[1].Id}" value="">""", html);
+        Assert.Contains($"""name="mode-{artifacts[0].Id}" value="new" checked>""", html);
+    }
 }

@@ -29,6 +29,12 @@ internal sealed class FakeWorkflowHubGateway : IWorkflowHubGateway
     /// <summary>Thrown by <see cref="ListTeamsAsync"/> when set.</summary>
     public Exception? ListFails { get; set; }
 
+    /// <summary>
+    /// Called by <see cref="ListTeamsAsync"/> after it records the call. The callback lists the teams after
+    /// its early checks and before the upload, so a test uses it to change the data in that window.
+    /// </summary>
+    public Action? OnListTeams { get; set; }
+
     /// <summary>Called with the zero-based call number and the requested visibility. Throws to fail.</summary>
     public Func<int, bool, WorkflowHubUpload> Respond { get; set; } = (n, makePublic) =>
         new WorkflowHubUpload(
@@ -74,6 +80,7 @@ internal sealed class FakeWorkflowHubGateway : IWorkflowHubGateway
     public Task<IReadOnlyList<WorkflowHubTeam>> ListTeamsAsync(string baseUrl, string token, CancellationToken ct)
     {
         lock (_recorded) TeamLists.Add((baseUrl, token));
+        OnListTeams?.Invoke();
         return ListFails is null
             ? Task.FromResult(Teams)
             : Task.FromException<IReadOnlyList<WorkflowHubTeam>>(ListFails);

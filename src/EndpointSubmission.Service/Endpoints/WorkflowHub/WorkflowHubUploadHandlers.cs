@@ -37,6 +37,14 @@ public static class WorkflowHubUploadHandlers
     internal const string NewEntryMode = "new";
 
     /// <summary>
+    /// The answer for a selection that was held back because an item's entry changed since the page was
+    /// shown. The state changed under the request, so it is a conflict, and the notice is a warning
+    /// because nothing went wrong that the user has to repair.
+    /// </summary>
+    private const int HeldBackStatus = StatusCodes.Status409Conflict;
+    private const string HeldBackKind = "warning";
+
+    /// <summary>
     /// The most items one login takes. The login cookie grows with every ticked item, and a browser
     /// drops a cookie above about 4096 bytes.
     /// </summary>
@@ -199,6 +207,12 @@ public static class WorkflowHubUploadHandlers
 
         try
         {
+            // The user was away on WorkflowHub, so an item's entry may have changed since the page was shown.
+            // This runs before the team rule, so a changed selection never reaches the team round or the
+            // no-team page. UploadAsync checks again under the lock.
+            if (await uploads.HoldBackIfEntriesChangedAsync(submission.Id, flow.Items, ct) is { } changed)
+                return await Redisplay(HeldBackStatus, HeldBackKind, changed);
+
             // A new version uses the entry's own teams, so only a selection with a new entry needs a team.
             // An update-only selection never lists the teams, which also lets an account without a team
             // add versions.
@@ -257,6 +271,7 @@ public static class WorkflowHubUploadHandlers
                 result = await uploads.UploadAsync(submission.Id, flow.Items, teamId, accessToken, ct);
             }
 
+            if (result.HeldBack) return await Redisplay(HeldBackStatus, HeldBackKind, result.Problem!);
             if (result.Problem is not null) return await Redisplay(400, "error", result.Problem);
 
             // The counts let the preview show what this upload did. They hold no text, only numbers.
@@ -322,8 +337,9 @@ public static class WorkflowHubUploadHandlers
     /// <summary>
     /// The ticked items with their visibility and upload choice, or the reason the form cannot be used.
     /// Only the value "new" in <c>mode-{id}</c> asks for a new entry. Anything else, including no field,
-    /// means a new version of the earlier entry when there is one. The form has no field for an entry
-    /// id, and the upload would ignore one, because it looks the entry up itself.
+    /// means a new version of the earlier entry when there is one. The field <c>entry-{id}</c> says which
+    /// entry the page showed. A missing or unreadable value means that it showed none. The upload only
+    /// compares that value with the lookup and never uses it as the target.
     /// </summary>
     private static (List<WorkflowHubSelectedItem>? Items, string? Problem) ReadSelection(IFormCollection form)
     {
@@ -337,7 +353,16 @@ public static class WorkflowHubUploadHandlers
                 return (null, "The visibility of an item must be private or public.");
 
             var asNewEntry = form[$"mode-{artifactId:D}"].ToString() == NewEntryMode;
-            items.Add(new WorkflowHubSelectedItem(artifactId, visibility == "public", asNewEntry));
+
+            // A new entry choice is never held back, so the shown entry is not kept for it. That keeps
+            // the login cookie small, see MaxItemsPerLogin.
+            var shownEntry = !asNewEntry
+                && int.TryParse(
+                    form[$"entry-{artifactId:D}"].ToString(), NumberStyles.None, CultureInfo.InvariantCulture, out var shown)
+                && shown > 0
+                    ? shown
+                    : (int?)null;
+            items.Add(new WorkflowHubSelectedItem(artifactId, visibility == "public", asNewEntry, shownEntry));
         }
 
         return items.Count == 0 ? (null, "Select at least one item to upload.") : (items, null);

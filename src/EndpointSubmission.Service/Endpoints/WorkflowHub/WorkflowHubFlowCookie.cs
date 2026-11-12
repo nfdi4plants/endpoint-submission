@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Options;
 
@@ -10,9 +11,25 @@ namespace EndpointSubmission.Service.Endpoints.WorkflowHub;
 /// <param name="AsNewEntry">
 /// True when the user chose a new entry although the item has an earlier entry. False means a new
 /// version of the earlier entry, if there is one. The default also covers a cookie written before the
-/// choice existed. The cookie never holds an entry id, because the upload looks the entry up itself.
+/// choice existed.
 /// </param>
-public sealed record WorkflowHubSelectedItem(Guid ArtifactId, bool MakePublic, bool AsNewEntry = false);
+/// <param name="ShownEntryId">
+/// The earlier entry the page showed for the item, or null when it showed none. The default also covers
+/// a cookie or form without the value. The upload only compares it with the entry it finds itself and
+/// never sends anything to it, because the entry always comes from the lookup at upload time. The form
+/// reader leaves it null for an item with a new entry choice, because a changed entry makes no difference
+/// for that item.
+/// </param>
+/// <remarks>
+/// The cookie omits values that are false or null. Together with the null above, that keeps the cookie of
+/// <see cref="WorkflowHubUploadHandlers.MaxItemsPerLogin"/> items below the 4096 bytes a browser keeps,
+/// also when every item shows an entry.
+/// </remarks>
+public sealed record WorkflowHubSelectedItem(
+    Guid ArtifactId,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool MakePublic,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool AsNewEntry = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] int? ShownEntryId = null);
 
 /// <summary>
 /// What the service remembers between sending the user to WorkflowHub and receiving them back.

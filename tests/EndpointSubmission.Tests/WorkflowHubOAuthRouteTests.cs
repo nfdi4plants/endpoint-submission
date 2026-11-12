@@ -2,6 +2,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Web;
 using EndpointSubmission.Service.Data;
 using EndpointSubmission.Service.Endpoints.WorkflowHub;
@@ -97,19 +98,32 @@ public class WorkflowHubOAuthRouteTests
         public string BackLink(string cssClass = "secondary")
             => $"""<a href="{PreviewPath}" role="button" class="{cssClass}">Back to the submission</a>""";
 
+        // The entry that the page would show for an item right now, by artifact id.
+        private readonly Dictionary<Guid, string> _entries = [];
+
+        /// <summary>
+        /// The form a browser posts. Without <paramref name="shown"/> every item carries the entry the page
+        /// shows right now, as if the page had just been opened. With it, the form carries exactly those
+        /// values, and an item that is not listed has no field. An empty value means the page showed none.
+        /// </summary>
         public List<KeyValuePair<string, string>> Form(
             (PreparedArtifact Artifact, string Visibility)[] items, string? team = null, string? t = null,
-            (PreparedArtifact Artifact, string Mode)[]? modes = null)
+            (PreparedArtifact Artifact, string Mode)[]? modes = null,
+            (PreparedArtifact Artifact, string Entry)[]? shown = null)
         {
             var fields = new List<KeyValuePair<string, string>> { new("t", t ?? StatusToken) };
             foreach (var (artifact, visibility) in items)
             {
                 fields.Add(new("item", artifact.Id.ToString()));
                 fields.Add(new($"visibility-{artifact.Id}", visibility));
+                if (shown is null) fields.Add(new($"entry-{artifact.Id}", _entries.GetValueOrDefault(artifact.Id, "")));
             }
 
             foreach (var (artifact, mode) in modes ?? [])
                 fields.Add(new($"mode-{artifact.Id}", mode));
+
+            foreach (var (artifact, entry) in shown ?? [])
+                fields.Add(new($"entry-{artifact.Id}", entry));
 
             if (team is not null) fields.Add(new("team", team));
             return fields;
@@ -144,6 +158,18 @@ public class WorkflowHubOAuthRouteTests
                 CreatedAt = DateTimeOffset.UtcNow.AddHours(-1)
             });
             db.SaveChanges();
+            _entries[artifact.Id] = number;
+        }
+
+        /// <summary>Removes every earlier entry of the item, so the lookup finds none any more.</summary>
+        public void ClearEarlierEntries(PreparedArtifact artifact)
+        {
+            using var scope = _app.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<SubmissionDbContext>();
+            var alias = $"{artifact.ItemKind}/{artifact.ItemIdentifier}";
+            db.Accessions.RemoveRange(db.Accessions.Where(a => a.SubmissionId != Submission.Id && a.Alias == alias));
+            db.SaveChanges();
+            _entries.Remove(artifact.Id);
         }
 
         public Task<(HttpResponseMessage Response, string Body)> Authorize(
@@ -160,9 +186,10 @@ public class WorkflowHubOAuthRouteTests
         /// <summary>Posts the form, expects the redirect to WorkflowHub and returns what the login cookie holds.</summary>
         public async Task<WorkflowHubPendingFlow> StartLogin(
             (PreparedArtifact Artifact, string Visibility)[] items, string? team = null, HttpClient? client = null,
-            (PreparedArtifact Artifact, string Mode)[]? modes = null)
+            (PreparedArtifact Artifact, string Mode)[]? modes = null,
+            (PreparedArtifact Artifact, string Entry)[]? shown = null)
         {
-            var (response, _) = await Authorize(Form(items, team, modes: modes), client);
+            var (response, _) = await Authorize(Form(items, team, modes: modes, shown: shown), client);
             Assert.Equal(HttpStatusCode.SeeOther, response.StatusCode);
             return Unprotect(CookieValue(response));
         }
@@ -333,6 +360,45 @@ public class WorkflowHubOAuthRouteTests
         var cookie = Assert.Single(response.Headers.GetValues("Set-Cookie"));
         Assert.True(cookie.Length < 4000, $"The Set-Cookie header has {cookie.Length} characters.");
         Assert.Equal(25, site.Unprotect(Site.CookieValue(response)).Items.Count);
+    }
+
+    [Theory]
+    [InlineData("version")]
+    [InlineData("new")]
+    public async Task The_login_cookie_for_25_items_that_all_show_an_entry_stays_below_the_size_a_browser_keeps(string mode)
+    {
+        using var site = new Site(extraItems: 23);
+        foreach (var artifact in site.Ready) site.AddEarlierEntry(artifact, "1234567", "12");
+        // A client without a cookie jar, because the jar throws for a cookie that is too large.
+        using var browser = site.NewClient(handleCookies: false);
+
+        var (response, _) = await site.Authorize(site.Form(
+            [.. site.Ready.Select(artifact => (artifact, "public"))],
+            modes: [.. site.Ready.Select(artifact => (artifact, mode))]), browser);
+
+        Assert.Equal(25, site.Ready.Count);
+        Assert.Equal(HttpStatusCode.SeeOther, response.StatusCode);
+        var cookie = Assert.Single(response.Headers.GetValues("Set-Cookie"));
+        Assert.True(cookie.Length < 4000, $"The Set-Cookie header has {cookie.Length} characters.");
+        var flow = site.Unprotect(Site.CookieValue(response));
+        // A new entry choice is never held back, so its item keeps no shown entry.
+        Assert.All(flow.Items, item => Assert.Equal(mode == "new" ? null : 1234567, item.ShownEntryId));
+        Assert.All(flow.Items, item => Assert.True(item.MakePublic));
+    }
+
+    [Fact]
+    public async Task A_new_entry_choice_keeps_no_shown_entry_and_the_other_items_keep_theirs()
+    {
+        using var site = new Site();
+        site.AddEarlierEntry(site.Align, "41", "2");
+        site.AddEarlierEntry(site.Other, "42", "1");
+
+        var flow = await site.StartLogin(
+            [(site.Align, "private"), (site.Other, "private")], modes: Mode(site.Align, ChosenNewEntry));
+
+        Assert.Equal(
+            new (Guid, bool, int?)[] { (site.Align.Id, true, null), (site.Other.Id, false, 42) },
+            flow.Items.Select(item => (item.ArtifactId, item.AsNewEntry, item.ShownEntryId)).ToArray());
     }
 
     [Fact]
@@ -970,7 +1036,7 @@ public class WorkflowHubOAuthRouteTests
         {
             SubmissionId = site.Submission.Id,
             StatusToken = site.StatusToken,
-            Items = new[] { new { ArtifactId = site.Align.Id, MakePublic = true } },
+            Items = new[] { new { ArtifactId = site.Align.Id, MakePublic = true, ShownEntryId = (int?)41 } },
             TeamId = (int?)null,
             State = "old-state",
             CodeVerifier = "old-verifier",
@@ -1141,7 +1207,8 @@ public class WorkflowHubOAuthRouteTests
         using var site = new Site();
         site.AddEarlierEntry(site.Align, "41", "2");
         var fields = site.Form(Pick(site.Align, "public"), modes: Mode(site.Align, "version"));
-        foreach (var name in new[] { "entry", "entryId", "entry-id", "workflowId", "workflow_id", $"entry-{site.Align.Id}", $"workflowId-{site.Align.Id}" })
+        // The field entry-{id} is not here. It carries the entry the page showed, and its own tests show it is only compared.
+        foreach (var name in new[] { "entry", "entryId", "entry-id", "workflowId", "workflow_id", $"workflowId-{site.Align.Id}" })
             fields.Add(new(name, "999"));
 
         var (response, _) = await site.Authorize(fields);
@@ -1192,6 +1259,382 @@ public class WorkflowHubOAuthRouteTests
         Assert.Contains($"""<input type="checkbox" id="item-{site.Align.Id}" name="item" value="{site.Align.Id}">""", html);
         Assert.Contains(Selected(site.Align, "version"), html);
         Assert.DoesNotContain("wfh-item-caution", html);
+        await site.AssertTokenNowhere();
+    }
+
+    private const string HeldBackClosing = "Nothing was uploaded. Check the entries below and continue to upload.";
+
+    /// <summary>The value of the hidden field <c>entry-{id}</c> of a page, which is what a browser posts back.</summary>
+    private static string HiddenEntry(string html, PreparedArtifact artifact)
+    {
+        var field = Regex.Match(html, $"""<input type="hidden" name="entry-{artifact.Id}" value="(\d*)">""");
+        Assert.True(field.Success, $"The page has no entry field for {artifact.ItemIdentifier}.");
+        return field.Groups[1].Value;
+    }
+
+    /// <summary>
+    /// A held-back selection: the page is shown again with the warning (HTTP 409), nothing reached
+    /// WorkflowHub, nothing was recorded except the one event, and the token was revoked and stored nowhere.
+    /// </summary>
+    private static async Task AssertHeldBack(Site site, HttpResponseMessage response, string html, string sentences)
+    {
+        var notice = $"{sentences} {HeldBackClosing}";
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.True(Deletes(response));
+        Assert.Contains("""<div class="wfh-notice wfh-notice-warning" role="alert">""", html);
+        Assert.Contains($"<p>{notice}</p>", html);
+        Assert.Contains($"""<span class="wfh-event-message">{notice}</span>""", html);
+
+        Assert.Empty(site.Gateway.Uploads);
+        Assert.Empty(site.Gateway.Versions);
+        Assert.Single(site.Gateway.Revokes);
+        var db = site.NewContext();
+        Assert.Empty(db.SubmissionAttempts);
+        Assert.Empty(db.SubmissionPayloads);
+        Assert.Empty(db.SubmissionReceipts);
+        Assert.Empty(db.Accessions.Where(a => a.SubmissionId == site.Submission.Id));
+        var held = Assert.Single(db.SubmissionEvents);
+        Assert.Equal(("upload.entry_changed", SubmissionEventLevel.Warning, notice), (held.Step, held.Level, held.Message));
+        Assert.Equal(SubmissionStatus.PreviewReady, db.Submissions.Single(s => s.Id == site.Submission.Id).Status);
+        await site.AssertTokenNowhere();
+    }
+
+    [Fact]
+    public async Task The_entry_the_page_showed_travels_through_the_login_cookie()
+    {
+        using var site = new Site();
+        site.AddEarlierEntry(site.Align, "41", "2");
+
+        var flow = await site.StartLogin([(site.Align, "private"), (site.Other, "public")]);
+
+        Assert.Equal(
+            new (Guid, int?)[] { (site.Align.Id, 41), (site.Other.Id, null) },
+            flow.Items.Select(item => (item.ArtifactId, item.ShownEntryId)).ToArray());
+        await site.AssertTokenNowhere();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("abc")]
+    [InlineData("0")]
+    [InlineData("-41")]
+    [InlineData("4 1")]
+    [InlineData("4.1")]
+    [InlineData("99999999999")]
+    public async Task A_missing_or_unreadable_entry_field_counts_as_none_shown(string? value)
+    {
+        using var site = new Site();
+
+        var flow = await site.StartLogin(
+            Pick(site.Align, "private"), shown: value is null ? [] : [(site.Align, value)]);
+
+        Assert.Null(Assert.Single(flow.Items).ShownEntryId);
+    }
+
+    [Fact]
+    public async Task A_login_cookie_without_the_entry_value_counts_as_none_shown()
+    {
+        using var site = new Site();
+        site.AddEarlierEntry(site.Align, "41", "2");
+        var old = JsonSerializer.Serialize(new
+        {
+            SubmissionId = site.Submission.Id,
+            StatusToken = site.StatusToken,
+            Items = new[] { new { ArtifactId = site.Align.Id, MakePublic = true, AsNewEntry = false } },
+            TeamId = (int?)null,
+            State = "old-state",
+            CodeVerifier = "old-verifier",
+            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10)
+        });
+        Assert.DoesNotContain("ShownEntryId", old);
+        using var browser = site.NewClient(handleCookies: false);
+        browser.DefaultRequestHeaders.Add("Cookie", $"{CookieName}={Uri.EscapeDataString(site.Protect(old))}");
+
+        var (response, html) = await site.Callback($"code={Code}&state=old-state", browser);
+
+        // The lookup has an entry and the cookie says the page showed none, so the item is held back.
+        await AssertHeldBack(site, response, html,
+            "workflow workflows/align: when you opened this page it was not on WorkflowHub. It is now on WorkflowHub as entry 41.");
+    }
+
+    [Fact]
+    public async Task An_entry_that_appeared_after_the_page_showed_none_holds_the_selection_back()
+    {
+        using var site = new Site();
+        var flow = await site.StartLogin([(site.Align, "public"), (site.Other, "private")]);
+        // A colleague uploads the item from another commit while the user is away on WorkflowHub.
+        site.AddEarlierEntry(site.Align, "55", "2");
+
+        var (response, html) = await site.Callback(Site.Confirmed(flow));
+
+        await AssertHeldBack(site, response, html,
+            "workflow workflows/align: when you opened this page it was not on WorkflowHub. It is now on WorkflowHub as entry 55.");
+        Assert.Empty(site.Gateway.TeamLists);
+        // The ticks and the visibility stay, the item now offers the entry, and the fields carry the current ids.
+        Assert.Contains($"""name="item" value="{site.Align.Id}" checked""", html);
+        Assert.Contains($"""name="item" value="{site.Other.Id}" checked""", html);
+        Assert.Matches(
+            $"""id="visibility-{site.Align.Id}" name="visibility-{site.Align.Id}">\s*<option value="private">Private</option>\s*<option value="public" selected>""",
+            html);
+        Assert.Matches(
+            $"""id="visibility-{site.Other.Id}" name="visibility-{site.Other.Id}">\s*<option value="private" selected>""",
+            html);
+        Assert.Contains("Already on WorkflowHub as entry 55, version 2.", html);
+        Assert.Contains(Selected(site.Align, "version"), html);
+        Assert.Equal("55", HiddenEntry(html, site.Align));
+        Assert.Equal("", HiddenEntry(html, site.Other));
+    }
+
+    [Fact]
+    public async Task An_entry_that_changed_after_the_page_showed_another_holds_the_selection_back()
+    {
+        using var site = new Site();
+        site.AddEarlierEntry(site.Align, "41", "2");
+        var flow = await site.StartLogin(Pick(site.Align, "private"));
+        site.AddEarlierEntry(site.Align, "55", "3");
+
+        var (response, html) = await site.Callback(Site.Confirmed(flow));
+
+        await AssertHeldBack(site, response, html,
+            "workflow workflows/align: the page showed entry 41. The latest entry is now 55.");
+        Assert.Empty(site.Gateway.TeamLists);
+        Assert.Contains($"""name="item" value="{site.Align.Id}" checked""", html);
+        Assert.Contains("Upload as a new version of entry 55", html);
+        Assert.DoesNotContain("Upload as a new version of entry 41", html);
+        Assert.Contains(Selected(site.Align, "version"), html);
+        Assert.Equal("55", HiddenEntry(html, site.Align));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task An_entry_that_vanished_after_the_page_showed_one_holds_the_selection_back_before_any_team_round(int teams)
+    {
+        using var site = new Site();
+        site.AddEarlierEntry(site.Align, "41", "2");
+        site.Gateway.Teams = [.. Enumerable.Range(1, teams).Select(n => new WorkflowHubTeam(n, $"Team {n}"))];
+        var flow = await site.StartLogin(Pick(site.Align, "public"));
+        site.ClearEarlierEntries(site.Align);
+
+        var (response, html) = await site.Callback(Site.Confirmed(flow));
+
+        // Without an entry the item would be a new entry. The team rule must not answer first, so there is
+        // no team list, no team picker and no page about a missing team.
+        await AssertHeldBack(site, response, html,
+            "workflow workflows/align: the page showed entry 41. No entry is recorded for it any more.");
+        Assert.Empty(site.Gateway.TeamLists);
+        Assert.DoesNotContain("your WorkflowHub account is not a member of any team", html);
+        Assert.DoesNotContain("You are a member of several WorkflowHub teams.", html);
+        Assert.Contains($"""name="item" value="{site.Align.Id}" checked""", html);
+        Assert.Contains("""<option value="public" selected>Public</option>""", html);
+        Assert.DoesNotContain("name=\"mode-", html);
+        Assert.Equal("", HiddenEntry(html, site.Align));
+    }
+
+    [Fact]
+    public async Task One_changed_item_holds_back_every_selected_item()
+    {
+        using var site = new Site(extraItems: 1);
+        var third = site.Ready[2];
+        site.AddEarlierEntry(site.Align, "41", "2");
+        site.Gateway.Teams = [new WorkflowHubTeam(5, "Team Five")];
+        var flow = await site.StartLogin([(site.Align, "private"), (site.Other, "private"), (third, "private")]);
+        // Only the second and the third item change. The first one is as the page showed it.
+        site.AddEarlierEntry(site.Other, "77", "1");
+        site.AddEarlierEntry(third, "78", "1");
+
+        var (response, html) = await site.Callback(Site.Confirmed(flow));
+
+        await AssertHeldBack(site, response, html,
+            "workflow workflows/other: when you opened this page it was not on WorkflowHub. It is now on WorkflowHub as entry 77. " +
+            "workflow workflows/extra-1: when you opened this page it was not on WorkflowHub. It is now on WorkflowHub as entry 78.");
+        Assert.DoesNotContain("workflow workflows/align: ", html);
+    }
+
+    [Fact]
+    public async Task The_new_entry_choice_is_never_a_reason_to_hold_back()
+    {
+        using var site = new Site();
+        site.AddEarlierEntry(site.Align, "41", "2");
+        site.Gateway.Teams = [new WorkflowHubTeam(5, "Team Five")];
+        var flow = await site.StartLogin(Pick(site.Align, "public"), modes: Mode(site.Align, ChosenNewEntry));
+        site.AddEarlierEntry(site.Align, "55", "3");
+
+        var (response, _) = await site.Callback(Site.Confirmed(flow));
+
+        Assert.Equal(HttpStatusCode.SeeOther, response.StatusCode);
+        Assert.Empty(site.Gateway.Versions);
+        var upload = Assert.Single(site.Gateway.Uploads);
+        Assert.Equal((5, true), (upload.TeamId, upload.MakePublic));
+        Assert.DoesNotContain(site.NewContext().SubmissionEvents, e => e.Step == "upload.entry_changed");
+        await site.AssertTokenNowhere();
+    }
+
+    [Fact]
+    public async Task Entries_that_are_as_the_page_showed_them_upload_as_before()
+    {
+        using var site = new Site();
+        site.AddEarlierEntry(site.Align, "41", "2");
+        site.Gateway.Teams = [new WorkflowHubTeam(5, "Team Five")];
+        var flow = await site.StartLogin([(site.Align, "private"), (site.Other, "public")]);
+
+        var (response, _) = await site.Callback(Site.Confirmed(flow));
+
+        Assert.Equal(HttpStatusCode.SeeOther, response.StatusCode);
+        Assert.Equal(41, Assert.Single(site.Gateway.Versions).WorkflowId);
+        Assert.Equal(site.Other.Content, Assert.Single(site.Gateway.Uploads).Crate);
+        Assert.DoesNotContain(site.NewContext().SubmissionEvents, e => e.Step == "upload.entry_changed");
+        await site.AssertTokenNowhere();
+    }
+
+    [Fact]
+    public async Task Continuing_from_the_page_shown_again_uploads_a_version_of_the_current_entry()
+    {
+        using var site = new Site();
+        site.AddEarlierEntry(site.Align, "41", "2");
+        var first = await site.StartLogin(Pick(site.Align, "private"));
+        site.AddEarlierEntry(site.Align, "55", "3");
+        var (held, html) = await site.Callback(Site.Confirmed(first));
+        Assert.Equal(HttpStatusCode.Conflict, held.StatusCode);
+
+        // The user continues with the form of the page shown again. The browser posts its hidden field.
+        var shown = HiddenEntry(html, site.Align);
+        Assert.Equal("55", shown);
+        var second = await site.StartLogin(Pick(site.Align, "private"), shown: [(site.Align, shown)]);
+        Assert.Equal(55, second.Items.Single().ShownEntryId);
+        var (done, _) = await site.Callback(Site.Confirmed(second));
+
+        Assert.Equal(HttpStatusCode.SeeOther, done.StatusCode);
+        Assert.Equal(55, Assert.Single(site.Gateway.Versions).WorkflowId);
+        Assert.Empty(site.Gateway.Uploads);
+        Assert.Equal(
+            "55", Assert.Single(site.NewContext().Accessions, a => a.SubmissionId == site.Submission.Id).AccessionNumber);
+        Assert.Single(site.NewContext().SubmissionEvents, e => e.Step == "upload.entry_changed");
+        await site.AssertTokenNowhere();
+    }
+
+    [Fact]
+    public async Task A_forged_entry_field_that_equals_the_lookup_goes_to_the_looked_up_entry()
+    {
+        using var site = new Site();
+        site.AddEarlierEntry(site.Align, "41", "2");
+        var fields = site.Form(Pick(site.Align, "private"), shown: [(site.Align, "41")]);
+        foreach (var name in new[] { "entry", "entryId", "workflowId", $"workflowId-{site.Align.Id}" })
+            fields.Add(new(name, "999"));
+
+        var (response, _) = await site.Authorize(fields);
+        Assert.Equal(HttpStatusCode.SeeOther, response.StatusCode);
+        var flow = site.Unprotect(Site.CookieValue(response));
+        var (done, _) = await site.Callback(Site.Confirmed(flow));
+
+        Assert.Equal(HttpStatusCode.SeeOther, done.StatusCode);
+        Assert.Equal(41, Assert.Single(site.Gateway.Versions).WorkflowId);
+        Assert.Empty(site.Gateway.Uploads);
+        await site.AssertTokenNowhere();
+    }
+
+    [Theory]
+    [InlineData("999", true)]
+    [InlineData("7", true)]
+    [InlineData("999", false)]
+    public async Task A_forged_entry_field_that_is_not_the_lookup_holds_back_and_is_never_the_target(string forged, bool entryExists)
+    {
+        using var site = new Site();
+        if (entryExists) site.AddEarlierEntry(site.Align, "41", "2");
+        site.Gateway.Teams = [new WorkflowHubTeam(5, "Team Five")];
+        var flow = await site.StartLogin(Pick(site.Align, "private"), shown: [(site.Align, forged)]);
+        Assert.Equal(int.Parse(forged), Assert.Single(flow.Items).ShownEntryId);
+
+        var (response, html) = await site.Callback(Site.Confirmed(flow));
+
+        await AssertHeldBack(site, response, html, entryExists
+            ? $"workflow workflows/align: the page showed entry {forged}. The latest entry is now 41."
+            : $"workflow workflows/align: the page showed entry {forged}. No entry is recorded for it any more.");
+        // The page shown again carries the lookup, never the forged value.
+        Assert.Equal(entryExists ? "41" : "", HiddenEntry(html, site.Align));
+        Assert.DoesNotContain($"value=\"{forged}\">", html);
+
+        // Continuing from that page goes to the looked-up entry, or becomes a new entry, and never to the forged one.
+        var second = await site.StartLogin(
+            Pick(site.Align, "private"), shown: [(site.Align, HiddenEntry(html, site.Align))]);
+        var (done, _) = await site.Callback(Site.Confirmed(second));
+        Assert.Equal(HttpStatusCode.SeeOther, done.StatusCode);
+        if (entryExists)
+        {
+            Assert.Equal(41, Assert.Single(site.Gateway.Versions).WorkflowId);
+            Assert.Empty(site.Gateway.Uploads);
+        }
+        else
+        {
+            Assert.Empty(site.Gateway.Versions);
+            Assert.Single(site.Gateway.Uploads);
+        }
+
+        Assert.DoesNotContain(
+            site.NewContext().Accessions.Where(a => a.SubmissionId == site.Submission.Id),
+            a => a.AccessionNumber == forged);
+        await site.AssertTokenNowhere();
+    }
+
+    [Fact]
+    public async Task An_entry_that_changes_while_the_teams_are_listed_still_holds_back_every_item_before_the_upload()
+    {
+        using var site = new Site();
+        site.AddEarlierEntry(site.Align, "41", "2");
+        site.Gateway.Teams = [new WorkflowHubTeam(5, "Team Five")];
+        // The second item is a new entry, so the callback needs the teams and lists them.
+        var flow = await site.StartLogin([(site.Align, "private"), (site.Other, "private")]);
+        // The early check passed. The entry changes after it, while the callback talks to WorkflowHub.
+        site.Gateway.OnListTeams = () => site.AddEarlierEntry(site.Align, "55", "3");
+
+        var (response, html) = await site.Callback(Site.Confirmed(flow));
+
+        Assert.Single(site.Gateway.TeamLists);
+        await AssertHeldBack(site, response, html,
+            "workflow workflows/align: the page showed entry 41. The latest entry is now 55.");
+        Assert.Equal("55", HiddenEntry(html, site.Align));
+    }
+
+    [Fact]
+    public async Task The_held_back_notice_and_its_event_escape_the_item_name()
+    {
+        using var site = new Site();
+        const string hostile = "<img src=x onerror=alert(1)>";
+        using (var db = site.NewContext())
+        {
+            db.PreparedArtifacts.Single(a => a.Id == site.Other.Id).ItemIdentifier = hostile;
+            db.SaveChanges();
+        }
+
+        site.Other.ItemIdentifier = hostile;
+        var flow = await site.StartLogin(Pick(site.Other, "private"));
+        site.AddEarlierEntry(site.Other, "55");
+
+        var (response, html) = await site.Callback(Site.Confirmed(flow));
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.DoesNotContain(hostile, html);
+        const string escaped = "workflow &lt;img src=x onerror=alert(1)&gt;: when you opened this page it was not on WorkflowHub.";
+        Assert.Contains($"<p>{escaped}", html);
+        Assert.Contains($"""<span class="wfh-event-message">{escaped}""", html);
+        await site.AssertTokenNowhere();
+    }
+
+    [Fact]
+    public async Task The_form_after_a_held_back_round_shows_the_current_entry_in_its_hidden_field_also_for_the_other_items()
+    {
+        using var site = new Site();
+        site.AddEarlierEntry(site.Other, "42", "1");
+        var flow = await site.StartLogin(Pick(site.Align, "private"));
+        site.AddEarlierEntry(site.Align, "55", "3");
+
+        var (_, html) = await site.Callback(Site.Confirmed(flow));
+
+        // The other item was not ticked, and its field still shows the current entry.
+        Assert.Equal("55", HiddenEntry(html, site.Align));
+        Assert.Equal("42", HiddenEntry(html, site.Other));
         await site.AssertTokenNowhere();
     }
 }

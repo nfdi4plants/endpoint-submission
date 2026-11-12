@@ -81,8 +81,9 @@ public class WorkflowHubUploadServiceTests
     private static WorkflowHubSelectedItem[] Items(params (PreparedArtifact Artifact, bool MakePublic)[] selected)
         => selected.Select(s => new WorkflowHubSelectedItem(s.Artifact.Id, s.MakePublic)).ToArray();
 
-    private static WorkflowHubSelectedItem Item(PreparedArtifact artifact, bool asNewEntry = false, bool makePublic = false)
-        => new(artifact.Id, makePublic, asNewEntry);
+    private static WorkflowHubSelectedItem Item(
+        PreparedArtifact artifact, bool asNewEntry = false, bool makePublic = false, int? shown = null)
+        => new(artifact.Id, makePublic, asNewEntry, shown);
 
     private static WorkflowHubGatewayException Rejected(string detail, string rawBody = "")
         => new(WorkflowHubFailureKind.Rejected, 422, detail, null, rawBody);
@@ -658,7 +659,7 @@ public class WorkflowHubUploadServiceTests
 
         // The visibility is for a new entry only. The version ignores it, and so does the missing team.
         var result = await f.Service.UploadAsync(
-            f.Submission.Id, [Item(f.Align, makePublic: true)], null, Token, default);
+            f.Submission.Id, [Item(f.Align, makePublic: true, shown: 41)], null, Token, default);
 
         Assert.Null(result.Problem);
         Assert.Equal(1, result.Succeeded);
@@ -737,12 +738,13 @@ public class WorkflowHubUploadServiceTests
         AddAccession(f, earlier, AlignAlias, "41", "1", createdAt: DateTimeOffset.UtcNow.AddHours(-3));
         AddAccession(f, earlier, AlignAlias, "55", "4", createdAt: DateTimeOffset.UtcNow.AddHours(-2));
 
-        await f.Service.UploadAsync(f.Submission.Id, [Item(f.Align)], TeamId, Token, default);
+        await f.Service.UploadAsync(f.Submission.Id, [Item(f.Align, shown: 55)], TeamId, Token, default);
 
         Assert.Equal(55, Assert.Single(f.Gateway.Versions).WorkflowId);
-        // The selection carries the item, the visibility and the choice. It has no place for an entry id.
+        // The selection carries the item, the visibility, the choice and the entry the page showed. That
+        // entry is only compared with the lookup, and the next tests show it is never the target.
         Assert.Equal(
-            new[] { "ArtifactId", "AsNewEntry", "MakePublic" },
+            new[] { "ArtifactId", "AsNewEntry", "MakePublic", "ShownEntryId" },
             typeof(WorkflowHubSelectedItem).GetProperties().Select(p => p.Name).Order().ToArray());
     }
 
@@ -765,7 +767,7 @@ public class WorkflowHubUploadServiceTests
             kind, status, "not allowed to edit", null, rawBody: $"{{\"errors\":[\"{Token} was refused\"]}}");
 
         var result = await f.Service.UploadAsync(
-            f.Submission.Id, [Item(f.Align), Item(f.Other)], TeamId, Token, default);
+            f.Submission.Id, [Item(f.Align, shown: 41), Item(f.Other)], TeamId, Token, default);
 
         Assert.Equal((1, 1, 0), (result.Succeeded, result.Failed, result.Unknown));
         Assert.Equal(f.Other.Content, Assert.Single(f.Gateway.Uploads).Crate);
@@ -799,7 +801,7 @@ public class WorkflowHubUploadServiceTests
         AddAccession(f, AddSubmission(f), AlignAlias, "41", "2");
         f.Gateway.RespondVersion = (_, _) => Version(99, 3, $"{{\"id\":99,\"note\":\"{Token}\"}}");
 
-        var result = await f.Service.UploadAsync(f.Submission.Id, [Item(f.Align)], null, Token, default);
+        var result = await f.Service.UploadAsync(f.Submission.Id, [Item(f.Align, shown: 41)], null, Token, default);
 
         Assert.Equal((0, 0, 1), (result.Succeeded, result.Failed, result.Unknown));
         Assert.Equal(41, Assert.Single(f.Gateway.Versions).WorkflowId);
@@ -835,7 +837,7 @@ public class WorkflowHubUploadServiceTests
         AddAccession(f, AddSubmission(f), AlignAlias, "41", "2");
         f.Gateway.RespondVersion = (_, id) => Version(id, 3, $"{{\"version\":3,\"echo\":\"{Token}\"}}");
 
-        var result = await f.Service.UploadAsync(f.Submission.Id, [Item(f.Align)], null, Token, default);
+        var result = await f.Service.UploadAsync(f.Submission.Id, [Item(f.Align, shown: 41)], null, Token, default);
 
         Assert.Equal(1, result.Succeeded);
         using var db = f.NewContext();
@@ -867,7 +869,7 @@ public class WorkflowHubUploadServiceTests
             rawBody: $"half an answer with {Token}");
 
         var result = await f.Service.UploadAsync(
-            f.Submission.Id, [Item(f.Align), Item(f.Other)], TeamId, Token, default);
+            f.Submission.Id, [Item(f.Align, shown: 41), Item(f.Other)], TeamId, Token, default);
 
         Assert.Equal((1, 0, 1), (result.Succeeded, result.Failed, result.Unknown));
         using var db = f.NewContext();
@@ -899,7 +901,7 @@ public class WorkflowHubUploadServiceTests
         AddAccession(f, AddSubmission(f), AlignAlias, "41", "2");
         f.Gateway.RespondVersion = (_, _) => throw new InvalidOperationException($"boom with {Token}");
 
-        var result = await f.Service.UploadAsync(f.Submission.Id, [Item(f.Align)], null, Token, default);
+        var result = await f.Service.UploadAsync(f.Submission.Id, [Item(f.Align, shown: 41)], null, Token, default);
 
         Assert.Equal(1, result.Unknown);
         using var db = f.NewContext();
@@ -924,7 +926,7 @@ public class WorkflowHubUploadServiceTests
         f.Gateway.RespondVersion = (_, _) => throw new WorkflowHubGatewayException(
             WorkflowHubFailureKind.UploadedButPolicyUnset, null, $"status 500: boom {Token}", 41, rawBody: "");
 
-        var result = await f.Service.UploadAsync(f.Submission.Id, [Item(f.Align)], null, Token, default);
+        var result = await f.Service.UploadAsync(f.Submission.Id, [Item(f.Align, shown: 41)], null, Token, default);
 
         Assert.Equal(1, result.Unknown);
         using var db = f.NewContext();
@@ -967,7 +969,7 @@ public class WorkflowHubUploadServiceTests
             return Version(id, 3);
         };
 
-        var result = await f.Service.UploadAsync(f.Submission.Id, [Item(f.Align), Item(f.Other)], null, Token, default);
+        var result = await f.Service.UploadAsync(f.Submission.Id, [Item(f.Align, shown: 41), Item(f.Other, shown: 42)], null, Token, default);
 
         Assert.Equal((1, 1), (result.Succeeded, result.Skipped));
         Assert.Equal(41, Assert.Single(f.Gateway.Versions).WorkflowId);
@@ -982,7 +984,7 @@ public class WorkflowHubUploadServiceTests
         var f = Build();
         AddAccession(f, AddSubmission(f), AlignAlias, "41", "2");
 
-        var result = await f.Service.UploadAsync(f.Submission.Id, [Item(f.Align), Item(f.Other)], null, Token, default);
+        var result = await f.Service.UploadAsync(f.Submission.Id, [Item(f.Align, shown: 41), Item(f.Other)], null, Token, default);
 
         Assert.Equal((1, 1), (result.Succeeded, result.Failed));
         Assert.Empty(f.Gateway.Uploads);
@@ -1008,5 +1010,173 @@ public class WorkflowHubUploadServiceTests
         using var db = f.NewContext();
         var entries = await WorkflowHubEarlierEntries.FindAsync(db, later, default);
         Assert.Equal(new WorkflowHubEarlierEntry(99, 1), entries[AlignAlias]);
+    }
+
+    private const string HeldBackClosing = "Nothing was uploaded. Check the entries below and continue to upload.";
+    private const string AlignAppeared =
+        "workflow workflows/align: when you opened this page it was not on WorkflowHub. It is now on WorkflowHub as entry 55.";
+    private const string AlignChanged = "workflow workflows/align: the page showed entry 41. The latest entry is now 55.";
+    private const string AlignVanished = "workflow workflows/align: the page showed entry 41. No entry is recorded for it any more.";
+    private const string OtherAppeared =
+        "workflow workflows/other: when you opened this page it was not on WorkflowHub. It is now on WorkflowHub as entry 77.";
+
+    /// <summary>Nothing reached WorkflowHub and nothing was recorded for an upload. The one event is the held-back warning.</summary>
+    private static async Task AssertHeldBackAndNothingElse(Fixture f, string sentences)
+    {
+        var notice = $"{sentences} {HeldBackClosing}";
+        Assert.Empty(f.Gateway.Uploads);
+        Assert.Empty(f.Gateway.Versions);
+        using var db = f.NewContext();
+        Assert.Empty(db.SubmissionAttempts);
+        Assert.Empty(db.SubmissionPayloads);
+        Assert.Empty(db.SubmissionReceipts);
+        Assert.Empty(db.Accessions.Where(a => a.SubmissionId == f.Submission.Id));
+        var held = await db.SubmissionEvents.SingleAsync();
+        Assert.Equal(("upload.entry_changed", SubmissionEventLevel.Warning, notice), (held.Step, held.Level, held.Message));
+        Assert.Equal(SubmissionStatus.PreviewReady, (await db.Submissions.SingleAsync(s => s.Id == f.Submission.Id)).Status);
+        await AssertTokenNotStored(f.Options);
+    }
+
+    [Theory]
+    [InlineData(null, "55", AlignAppeared)]
+    [InlineData(41, "55", AlignChanged)]
+    [InlineData(41, null, AlignVanished)]
+    public async Task An_item_that_would_go_elsewhere_than_the_page_said_holds_back_the_whole_selection(
+        int? shown, string? lookup, string sentence)
+    {
+        var f = Build();
+        if (lookup is not null) AddAccession(f, AddSubmission(f), AlignAlias, lookup, "2");
+
+        // The second item is as the page showed it, and it is held back with the first one.
+        var result = await f.Service.UploadAsync(
+            f.Submission.Id, [Item(f.Align, shown: shown), Item(f.Other)], TeamId, Token, default);
+
+        Assert.Equal($"{sentence} {HeldBackClosing}", result.Problem);
+        Assert.True(result.HeldBack);
+        Assert.Equal((0, 0, 0, 0, 0), (result.Succeeded, result.PartiallyFailed, result.Failed, result.Skipped, result.Unknown));
+        await AssertHeldBackAndNothingElse(f, sentence);
+    }
+
+    [Fact]
+    public async Task The_early_check_gives_the_same_notice_and_the_event_and_stays_silent_for_an_unchanged_selection()
+    {
+        var f = Build();
+        AddAccession(f, AddSubmission(f), AlignAlias, "55", "2");
+
+        Task<string?> Early(Guid submissionId, params WorkflowHubSelectedItem[] items)
+            => f.Service.HoldBackIfEntriesChangedAsync(submissionId, items, default);
+
+        Assert.Null(await Early(f.Submission.Id, Item(f.Align, shown: 55), Item(f.Other)));
+        Assert.Null(await Early(Guid.NewGuid(), Item(f.Align)));
+        using (var db = f.NewContext()) Assert.Empty(db.SubmissionEvents);
+
+        Assert.Equal($"{AlignChanged} {HeldBackClosing}", await Early(f.Submission.Id, Item(f.Align, shown: 41), Item(f.Other)));
+        await AssertHeldBackAndNothingElse(f, AlignChanged);
+    }
+
+    [Fact]
+    public async Task The_notice_names_every_changed_item_in_the_order_of_the_selection()
+    {
+        var f = Build();
+        var earlier = AddSubmission(f);
+        AddAccession(f, earlier, AlignAlias, "55", "2");
+        AddAccession(f, earlier, OtherAlias, "77", "1");
+
+        var result = await f.Service.UploadAsync(
+            f.Submission.Id, [Item(f.Other, shown: null), Item(f.Align, shown: 41)], TeamId, Token, default);
+
+        Assert.Equal($"{OtherAppeared} {AlignChanged} {HeldBackClosing}", result.Problem);
+        await AssertHeldBackAndNothingElse(f, $"{OtherAppeared} {AlignChanged}");
+    }
+
+    [Fact]
+    public async Task One_changed_item_among_unchanged_ones_still_holds_back_all_of_them_and_the_notice_names_only_it()
+    {
+        var f = Build();
+        var earlier = AddSubmission(f);
+        AddAccession(f, earlier, AlignAlias, "41", "2");
+        AddAccession(f, earlier, OtherAlias, "77", "1");
+
+        var result = await f.Service.UploadAsync(
+            f.Submission.Id, [Item(f.Align, shown: 41), Item(f.Other)], TeamId, Token, default);
+
+        Assert.Equal($"{OtherAppeared} {HeldBackClosing}", result.Problem);
+        Assert.DoesNotContain("workflows/align", result.Problem);
+        await AssertHeldBackAndNothingElse(f, OtherAppeared);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(41)]
+    public async Task The_new_entry_choice_is_not_held_back_by_a_changed_entry(int? shown)
+    {
+        var f = Build();
+        AddAccession(f, AddSubmission(f), AlignAlias, "55", "2");
+
+        var result = await f.Service.UploadAsync(
+            f.Submission.Id, [Item(f.Align, asNewEntry: true, shown: shown)], TeamId, Token, default);
+
+        Assert.Null(result.Problem);
+        Assert.False(result.HeldBack);
+        Assert.Equal(1, result.Succeeded);
+        Assert.Empty(f.Gateway.Versions);
+        Assert.Single(f.Gateway.Uploads);
+        using var db = f.NewContext();
+        Assert.DoesNotContain(db.SubmissionEvents, e => e.Step == "upload.entry_changed");
+    }
+
+    [Fact]
+    public async Task Items_that_go_where_the_page_said_are_uploaded_without_a_hold_back_event()
+    {
+        var f = Build();
+        AddAccession(f, AddSubmission(f), AlignAlias, "41", "2");
+
+        var result = await f.Service.UploadAsync(
+            f.Submission.Id, [Item(f.Align, shown: 41), Item(f.Other)], TeamId, Token, default);
+
+        Assert.Null(result.Problem);
+        Assert.Equal(2, result.Succeeded);
+        Assert.Equal(41, Assert.Single(f.Gateway.Versions).WorkflowId);
+        Assert.Equal(f.Other.Content, Assert.Single(f.Gateway.Uploads).Crate);
+        using var db = f.NewContext();
+        Assert.DoesNotContain(db.SubmissionEvents, e => e.Step == "upload.entry_changed");
+    }
+
+    [Fact]
+    public async Task The_entry_the_page_showed_is_only_compared_and_never_the_target()
+    {
+        var f = Build();
+        AddAccession(f, AddSubmission(f), AlignAlias, "41", "2");
+
+        var forged = await f.Service.UploadAsync(f.Submission.Id, [Item(f.Align, shown: 999)], null, Token, default);
+
+        Assert.True(forged.HeldBack);
+        Assert.Equal(
+            $"workflow workflows/align: the page showed entry 999. The latest entry is now 41. {HeldBackClosing}", forged.Problem);
+        Assert.Empty(f.Gateway.Versions);
+        Assert.Empty(f.Gateway.Uploads);
+
+        var honest = await f.Service.UploadAsync(f.Submission.Id, [Item(f.Align, shown: 41)], null, Token, default);
+
+        Assert.Equal(1, honest.Succeeded);
+        Assert.Equal(41, Assert.Single(f.Gateway.Versions).WorkflowId);
+        using var db = f.NewContext();
+        Assert.DoesNotContain(db.Accessions, a => a.AccessionNumber == "999");
+        await AssertTokenNotStored(f.Options);
+    }
+
+    [Fact]
+    public async Task The_selection_checks_come_before_the_hold_back()
+    {
+        var f = Build();
+        AddAccession(f, AddSubmission(f), AlignAlias, "41", "2");
+        AddAccession(f, f.Submission, AlignAlias, "77");
+
+        var result = await f.Service.UploadAsync(f.Submission.Id, [Item(f.Align)], TeamId, Token, default);
+
+        Assert.Contains("workflows/align was uploaded already", result.Problem);
+        Assert.False(result.HeldBack);
+        using var db = f.NewContext();
+        Assert.Empty(db.SubmissionEvents);
     }
 }

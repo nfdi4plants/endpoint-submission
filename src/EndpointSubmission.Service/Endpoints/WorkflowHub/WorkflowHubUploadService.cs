@@ -12,10 +12,15 @@ namespace EndpointSubmission.Service.Endpoints.WorkflowHub;
 /// </param>
 /// <param name="Skipped">Items that already had an accession by the time their turn came.</param>
 /// <param name="Unknown">Items whose upload got no usable answer. The entry may exist on WorkflowHub.</param>
+/// <param name="HeldBack">
+/// True when <paramref name="Problem"/> says that the entry of an item changed since the page was shown.
+/// The page then shows the current state again, and the user continues from there.
+/// </param>
 public sealed record WorkflowHubUploadResult(
-    string? Problem, int Succeeded, int PartiallyFailed, int Failed, int Skipped, int Unknown)
+    string? Problem, int Succeeded, int PartiallyFailed, int Failed, int Skipped, int Unknown, bool HeldBack = false)
 {
-    public static WorkflowHubUploadResult Refused(string problem) => new(problem, 0, 0, 0, 0, 0);
+    public static WorkflowHubUploadResult Refused(string problem, bool heldBack = false)
+        => new(problem, 0, 0, 0, 0, 0, heldBack);
 }
 
 /// <summary>
@@ -111,6 +116,75 @@ public class WorkflowHubUploadService(
         => !item.AsNewEntry && earlierEntries.TryGetValue(alias, out var entry) ? entry : null;
 
     /// <summary>
+    /// The early form of the hold-back check, for the callback before it asks for a team. It compares
+    /// what the page showed with what the lookup says now, exactly as <see cref="UploadAsync"/> does,
+    /// and returns the notice for the user, or null when every selected item goes where the page showed.
+    /// A held-back selection records the warning event "upload.entry_changed". Nothing is sent.
+    /// </summary>
+    public async Task<string?> HoldBackIfEntriesChangedAsync(
+        Guid submissionId, IReadOnlyList<WorkflowHubSelectedItem> items, CancellationToken ct)
+    {
+        var submission = await db.Submissions.AsNoTracking().FirstOrDefaultAsync(
+            s => s.Id == submissionId && s.Endpoint == "workflowhub", ct);
+        if (submission is null) return null;
+
+        var earlierEntries = await WorkflowHubEarlierEntries.FindAsync(db, submission, ct);
+        return await HoldBackIfEntriesChangedAsync(submission, items, earlierEntries, ct);
+    }
+
+    /// <summary>
+    /// The one place that compares where the page said each item would go with where the lookup sends it
+    /// now. The page said a new entry when the user chose one or when it showed no entry, and otherwise
+    /// a new version of the entry it showed. The lookup says <see cref="EntryToUpdate"/>. If any item
+    /// differs, the notice names every such item and what changed, and the event with the same text is
+    /// stored. An item with a new entry choice never differs, because a changed entry makes no difference
+    /// for it. The shown entry is only compared and is never an upload target.
+    /// </summary>
+    private async Task<string?> HoldBackIfEntriesChangedAsync(
+        Submission submission,
+        IReadOnlyList<WorkflowHubSelectedItem> items,
+        IReadOnlyDictionary<string, WorkflowHubEarlierEntry> earlierEntries,
+        CancellationToken ct)
+    {
+        var ids = items.Select(i => i.ArtifactId).ToList();
+        var rows = await db.PreparedArtifacts.AsNoTracking()
+            .Where(a => a.SubmissionId == submission.Id && ids.Contains(a.Id))
+            .Select(a => new { a.Id, a.ItemKind, a.ItemIdentifier })
+            .ToListAsync(ct);
+
+        var changes = new List<string>();
+        foreach (var item in items)
+        {
+            // A row that is missing is the business of ValidateSelection.
+            if (rows.FirstOrDefault(r => r.Id == item.ArtifactId) is not { } row) continue;
+
+            var shown = item.AsNewEntry ? null : item.ShownEntryId;
+            var now = EntryToUpdate(item, $"{row.ItemKind}/{row.ItemIdentifier}", earlierEntries)?.EntryId;
+            if (shown == now) continue;
+
+            var label = $"{row.ItemKind} {row.ItemIdentifier}";
+            changes.Add((shown, now) switch
+            {
+                (null, { } current) =>
+                    $"{label}: when you opened this page it was not on WorkflowHub. It is now on WorkflowHub as entry {Number(current)}.",
+                ({ } was, { } current) =>
+                    $"{label}: the page showed entry {Number(was)}. The latest entry is now {Number(current)}.",
+                ({ } was, null) =>
+                    $"{label}: the page showed entry {Number(was)}. No entry is recorded for it any more.",
+                _ => throw new InvalidOperationException("Equal entries are not a change.")
+            });
+        }
+
+        if (changes.Count == 0) return null;
+
+        var notice = string.Join(" ", changes) + " Nothing was uploaded. Check the entries below and continue to upload.";
+        await AddEvent(submission.Id, "upload.entry_changed", SubmissionEventLevel.Warning, notice, ct);
+        return notice;
+    }
+
+    private static string Number(int number) => number.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>
     /// Uploads the selected items. Every item must be a ready artifact of this submission with content
     /// and no accession yet, or the whole request is refused and nothing is sent.
     ///
@@ -119,6 +193,11 @@ public class WorkflowHubUploadService(
     /// the caller. Every other item becomes a new entry in <paramref name="teamId"/> with its chosen
     /// visibility. The team can be null when every item is a new version. A new entry without a team fails
     /// that item before anything is sent.
+    ///
+    /// The lookup can change while the user is away on the WorkflowHub login. Before anything is sent,
+    /// each item's entry is compared with the one the page showed. If any item would go elsewhere than the page
+    /// said, the whole selection is held back: nothing is sent or recorded except one event, and the result
+    /// is a refusal with <see cref="WorkflowHubUploadResult.HeldBack"/> set.
     ///
     /// <paramref name="ct"/> covers the checks. The upload loop that follows runs to its end
     /// whether or not the caller is still there. The user asked for the upload and an uploaded entry
@@ -142,6 +221,9 @@ public class WorkflowHubUploadService(
         if (problem is not null) return WorkflowHubUploadResult.Refused(problem);
 
         var earlierEntries = await WorkflowHubEarlierEntries.FindAsync(db, submission, ct);
+
+        var notice = await HoldBackIfEntriesChangedAsync(submission, items, earlierEntries, ct);
+        if (notice is not null) return WorkflowHubUploadResult.Refused(notice, heldBack: true);
 
         var baseUrl = WorkflowHubPreviewHandlers.InstanceBase(submission.Target, options.Value);
         var work = CancellationToken.None;
@@ -176,8 +258,8 @@ public class WorkflowHubUploadService(
             var entryToUpdate = EntryToUpdate(item, alias, earlierEntries);
             if (entryToUpdate is null && teamId is null)
             {
-                // The callback only skips the team when every item is a new version, so this means the
-                // earlier entries changed in between.
+                // The callback only skips the team when every item is a new version, and the hold-back
+                // check above refuses a selection whose entries changed. This is a last safeguard.
                 outcomes.Add(ItemOutcome.Failed);
                 await AddEvent(submissionId, "upload.failed", SubmissionEventLevel.Error,
                     $"{label} needs a new WorkflowHub entry, which needs a team, and no team was chosen. It was not uploaded.", work);

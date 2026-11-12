@@ -96,7 +96,10 @@ version of entry N". The user can choose "Upload as a new entry" instead, and on
 visibility and needs a team. A new version keeps the visibility and the teams of its entry, and an account
 without a team can add versions. WorkflowHub decides whether the logged-in person may add a version, and
 when it refuses, the item stays on the page with its choice and the activity log says what WorkflowHub
-answered.
+answered. The form remembers which entry the page showed for each item. If an item would go somewhere
+else when the upload starts, for example because a colleague uploaded it during the WorkflowHub login,
+the service sends nothing for any item, records a warning in the activity log and shows the page again
+with a notice (HTTP 409) that names the item and the entries, and the user continues from that page.
 
 Register one OAuth application per WorkflowHub instance under My Profile, Actions, API Applications.
 Make it a non-confidential application with the scopes `read write` and the redirect URI

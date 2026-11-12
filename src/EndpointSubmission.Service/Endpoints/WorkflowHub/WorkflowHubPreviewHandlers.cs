@@ -17,6 +17,7 @@ namespace EndpointSubmission.Service.Endpoints.WorkflowHub;
 /// <param name="Teams">The user's teams, known after the WorkflowHub login. With several, the form shows a required radio group.</param>
 /// <param name="TeamId">The team chosen in an earlier round. Without a radio group, the form carries it in a hidden field.</param>
 /// <param name="NewEntryItems">Artifact ids whose choice stays on "Upload as a new entry". Every other item with an earlier entry shows "new version".</param>
+/// <remarks>The entry ids in the hidden fields are not part of this state. A page shown again always carries the current ones.</remarks>
 public sealed record WorkflowHubFormState(
     IReadOnlySet<Guid> CheckedItems,
     IReadOnlyDictionary<Guid, bool> PublicItems,
@@ -493,6 +494,13 @@ public static class WorkflowHubPreviewHandlers
         // entry only, so the script hides it while the new version is chosen. Without the script the
         // select stays and says so.
         var choice = earlier is null ? "" : EarlierEntryChoice(a, instanceBase, earlier, id, asNewEntry);
+
+        // The hidden field says which entry this page showed, so the upload can notice that it changed
+        // while the user was away on WorkflowHub. It always holds the current lookup, also on a page shown
+        // again, because continuing from that page confirms the current state. The upload never sends
+        // anything to this value.
+        var shownEntry = $@"
+                  <input type=""hidden"" name=""entry-{id}"" value=""{Html.Text(earlier?.EntryId.ToString(CultureInfo.InvariantCulture) ?? "")}"">";
         var visibilityAttribute = earlier is null ? "" : " data-wfh-visibility";
         var visibilityHint = earlier is null
             ? ""
@@ -502,7 +510,7 @@ public static class WorkflowHubPreviewHandlers
               <li class=""wfh-item wfh-item-ready{cautionClass}"">
                 <div class=""wfh-pick"">
                   <input type=""checkbox"" id=""item-{id}"" name=""item"" value=""{id}""{(caution ? $@" aria-describedby=""caution-{id}"" data-wfh-caution" : "")}{(isChecked ? " checked" : "")}>
-                  <label for=""item-{id}"">{Describe(a)}</label>{warning}{lfsPointers}{choice}
+                  <label for=""item-{id}"">{Describe(a)}</label>{warning}{lfsPointers}{choice}{shownEntry}
                 </div>
                 <span class=""wfh-size"">{Size(a.SizeBytes)}</span>
                 <div class=""wfh-visibility""{visibilityAttribute}>
