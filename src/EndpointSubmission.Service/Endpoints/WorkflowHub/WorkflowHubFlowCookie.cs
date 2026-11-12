@@ -5,8 +5,14 @@ using Microsoft.Extensions.Options;
 
 namespace EndpointSubmission.Service.Endpoints.WorkflowHub;
 
-/// <summary>One item the user ticked on the preview page, with the visibility chosen for it.</summary>
-public sealed record WorkflowHubSelectedItem(Guid ArtifactId, bool MakePublic);
+/// <summary>One item the user ticked on the preview page, with the visibility and the upload choice made for it.</summary>
+/// <param name="MakePublic">The visibility of a new entry. A new version keeps the visibility of its entry.</param>
+/// <param name="AsNewEntry">
+/// True when the user chose a new entry although the item has an earlier entry. False means a new
+/// version of the earlier entry, if there is one. The default also covers a cookie written before the
+/// choice existed. The cookie never holds an entry id, because the upload looks the entry up itself.
+/// </param>
+public sealed record WorkflowHubSelectedItem(Guid ArtifactId, bool MakePublic, bool AsNewEntry = false);
 
 /// <summary>
 /// What the service remembers between sending the user to WorkflowHub and receiving them back.

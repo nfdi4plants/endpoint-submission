@@ -1,6 +1,9 @@
 // Feedback for the WorkflowHub upload form. The form works without this script.
 // The button starts the login on WorkflowHub, so it shows a busy text until the browser leaves
 // this page. The script makes no request of its own.
+// An item that an earlier commit already put on WorkflowHub offers a new version or a new entry.
+// The script hides the visibility of such an item while the new version is chosen, and it marks the
+// team choice as required only while a new entry is selected, because a new version needs no team.
 (function () {
   "use strict";
 
@@ -26,6 +29,47 @@
 
   function hideMessage() {
     if (message) message.hidden = true;
+  }
+
+  // Items with an earlier entry carry a choice. Items without one always become a new entry.
+  var choices = Array.prototype.slice.call(form.querySelectorAll("[data-wfh-mode]"));
+  var teamRadios = Array.prototype.slice.call(
+    form.querySelectorAll('input[type="radio"][name="team"]'));
+
+  function choiceOf(item) {
+    var row = item.closest("li");
+    return row ? row.querySelector("[data-wfh-mode]") : null;
+  }
+
+  function newVersionChosen(choice) {
+    var picked = choice ? choice.querySelector('input[type="radio"]:checked') : null;
+    return !!picked && picked.value === "version";
+  }
+
+  // The visibility applies to a new entry only. The hint is for readers without this script.
+  function syncVisibility(choice) {
+    var row = choice.closest("li");
+    var visibility = row ? row.querySelector("[data-wfh-visibility]") : null;
+    if (!visibility) return;
+    visibility.hidden = newVersionChosen(choice);
+    var hint = visibility.querySelector("[data-wfh-visibility-hint]");
+    if (hint) hint.hidden = true;
+  }
+
+  // The team radio group comes without "required" when the page has a choice. A selection that
+  // only adds versions needs no team, and any other selection needs one.
+  function syncTeamRequired() {
+    if (choices.length === 0 || teamRadios.length === 0) return;
+    var ticked = items.filter(function (item) { return item.checked; });
+    var versionsOnly = ticked.length > 0 && ticked.every(function (item) {
+      return newVersionChosen(choiceOf(item));
+    });
+    teamRadios.forEach(function (radio) { radio.required = !versionsOnly; });
+  }
+
+  function syncChoices() {
+    choices.forEach(syncVisibility);
+    syncTeamRequired();
   }
 
   function syncSelectAll() {
@@ -57,6 +101,7 @@
     if (label && bulk.length > 0) label.hidden = false;
     selectAll.addEventListener("change", function () {
       bulk.forEach(function (item) { item.checked = selectAll.checked; });
+      syncTeamRequired();
       hideMessage();
     });
   }
@@ -64,10 +109,18 @@
   items.forEach(function (item) {
     item.addEventListener("change", function () {
       syncSelectAll();
+      syncTeamRequired();
       hideMessage();
     });
   });
+  choices.forEach(function (choice) {
+    choice.addEventListener("change", function () {
+      syncVisibility(choice);
+      syncTeamRequired();
+    });
+  });
   syncSelectAll();
+  syncChoices();
 
   if (!button) return;
 
@@ -98,4 +151,5 @@
   // A page restored from the back-forward cache keeps the busy state, and so can a page that
   // the browser reloads with its form state. Every show of the page starts clean.
   window.addEventListener("pageshow", reset);
+  window.addEventListener("pageshow", syncChoices);
 })();

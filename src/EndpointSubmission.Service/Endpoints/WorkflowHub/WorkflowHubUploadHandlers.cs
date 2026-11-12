@@ -33,6 +33,9 @@ public static class WorkflowHubUploadHandlers
     private const string SeveralTeamsText =
         "You are a member of several WorkflowHub teams. Choose the team to upload to, then continue. WorkflowHub asks you to confirm once more.";
 
+    /// <summary>The value of <c>mode-{id}</c> that asks for a new entry. The other value on the form is "version".</summary>
+    internal const string NewEntryMode = "new";
+
     /// <summary>
     /// The most items one login takes. The login cookie grows with every ticked item, and a browser
     /// drops a cookie above about 4096 bytes.
@@ -106,7 +109,7 @@ public static class WorkflowHubUploadHandlers
         cookies.Write(http, new WorkflowHubPendingFlow(
             submission.Id,
             statusToken,
-            items.Select(item => new WorkflowHubSelectedItem(item.ArtifactId, item.MakePublic)).ToList(),
+            items,
             teamId,
             state,
             verifier,
@@ -196,49 +199,53 @@ public static class WorkflowHubUploadHandlers
 
         try
         {
-            IReadOnlyList<WorkflowHubTeam> teams;
-            try
+            // A new version uses the entry's own teams, so only a selection with a new entry needs a team.
+            // An update-only selection never lists the teams, which also lets an account without a team
+            // add versions.
+            int? teamId = null;
+            if (await uploads.NeedsTeamAsync(submission.Id, flow.Items, ct))
             {
-                teams = await uploads.ListTeamsAsync(submission.Id, accessToken, ct);
-            }
-            // SEEK answers /people/current with 404 "No user logged in" for a token it does not know.
-            catch (WorkflowHubGatewayException ex) when (ex.Kind == WorkflowHubFailureKind.Rejected && ex.Status is 401 or 403 or 404)
-            {
-                return await Redisplay(400, "error", "WorkflowHub did not accept the login. Start the upload again.");
-            }
-            catch (WorkflowHubGatewayException ex)
-            {
-                logger.LogWarning("Listing WorkflowHub teams failed for submission {SubmissionId} with {Kind}",
-                    submission.Id, ex.Kind);
-                return Page(502, "WorkflowHub unavailable", WithBackButton(
-                    "<p>WorkflowHub could not be reached or answered with an error. Nothing was uploaded.</p>",
-                    previewPath));
-            }
-
-            if (teams.Count == 0)
-                return Results.Text(WorkflowHubResultPages.NoTeam(target.BaseUrl, previewPath), "text/html");
-
-            int teamId;
-            if (flow.TeamId is { } chosen)
-            {
-                if (teams.All(team => team.Id != chosen))
+                IReadOnlyList<WorkflowHubTeam> teams;
+                try
                 {
-                    return await Redisplay(400, "error",
-                        "You are not a member of the chosen WorkflowHub team. Choose another one.", teams);
+                    teams = await uploads.ListTeamsAsync(submission.Id, accessToken, ct);
+                }
+                // SEEK answers /people/current with 404 "No user logged in" for a token it does not know.
+                catch (WorkflowHubGatewayException ex) when (ex.Kind == WorkflowHubFailureKind.Rejected && ex.Status is 401 or 403 or 404)
+                {
+                    return await Redisplay(400, "error", "WorkflowHub did not accept the login. Start the upload again.");
+                }
+                catch (WorkflowHubGatewayException ex)
+                {
+                    logger.LogWarning("Listing WorkflowHub teams failed for submission {SubmissionId} with {Kind}",
+                        submission.Id, ex.Kind);
+                    return Page(502, "WorkflowHub unavailable", WithBackButton(
+                        "<p>WorkflowHub could not be reached or answered with an error. Nothing was uploaded.</p>",
+                        previewPath));
                 }
 
-                teamId = chosen;
-            }
-            else if (teams.Count == 1)
-            {
-                teamId = teams[0].Id;
-            }
-            else
-            {
-                return await Redisplay(200, "info", SeveralTeamsText, teams);
-            }
+                if (teams.Count == 0)
+                    return Results.Text(WorkflowHubResultPages.NoTeam(target.BaseUrl, previewPath), "text/html");
 
-            var selected = flow.Items.Select(item => (item.ArtifactId, item.MakePublic)).ToList();
+                if (flow.TeamId is { } chosen)
+                {
+                    if (teams.All(team => team.Id != chosen))
+                    {
+                        return await Redisplay(400, "error",
+                            "You are not a member of the chosen WorkflowHub team. Choose another one.", teams);
+                    }
+
+                    teamId = chosen;
+                }
+                else if (teams.Count == 1)
+                {
+                    teamId = teams[0].Id;
+                }
+                else
+                {
+                    return await Redisplay(200, "info", SeveralTeamsText, teams);
+                }
+            }
 
             // Two callbacks of one submission can arrive together, from two logins that run at the same
             // time in different tabs or browsers, or from a repeated consent on WorkflowHub. The second
@@ -247,7 +254,7 @@ public static class WorkflowHubUploadHandlers
             WorkflowHubUploadResult result;
             using (await locks.AcquireAsync("upload|" + submission.Id.ToString("D"), ct))
             {
-                result = await uploads.UploadAsync(submission.Id, selected, teamId, accessToken, ct);
+                result = await uploads.UploadAsync(submission.Id, flow.Items, teamId, accessToken, ct);
             }
 
             if (result.Problem is not null) return await Redisplay(400, "error", result.Problem);
@@ -312,10 +319,15 @@ public static class WorkflowHubUploadHandlers
             publicBase), null);
     }
 
-    /// <summary>The ticked items with their visibility, or the reason the form cannot be used.</summary>
-    private static (List<(Guid ArtifactId, bool MakePublic)>? Items, string? Problem) ReadSelection(IFormCollection form)
+    /// <summary>
+    /// The ticked items with their visibility and upload choice, or the reason the form cannot be used.
+    /// Only the value "new" in <c>mode-{id}</c> asks for a new entry. Anything else, including no field,
+    /// means a new version of the earlier entry when there is one. The form has no field for an entry
+    /// id, and the upload would ignore one, because it looks the entry up itself.
+    /// </summary>
+    private static (List<WorkflowHubSelectedItem>? Items, string? Problem) ReadSelection(IFormCollection form)
     {
-        var items = new List<(Guid, bool)>();
+        var items = new List<WorkflowHubSelectedItem>();
         foreach (var raw in form["item"])
         {
             if (!Guid.TryParse(raw, out var artifactId)) return (null, "A selected item is not valid.");
@@ -324,13 +336,14 @@ public static class WorkflowHubUploadHandlers
             if (visibility is not ("" or "private" or "public"))
                 return (null, "The visibility of an item must be private or public.");
 
-            items.Add((artifactId, visibility == "public"));
+            var asNewEntry = form[$"mode-{artifactId:D}"].ToString() == NewEntryMode;
+            items.Add(new WorkflowHubSelectedItem(artifactId, visibility == "public", asNewEntry));
         }
 
         return items.Count == 0 ? (null, "Select at least one item to upload.") : (items, null);
     }
 
-    /// <summary>What the form shows again after a refused selection: the ticked items and every visibility choice.</summary>
+    /// <summary>What the form shows again after a refused selection: the ticked items, every visibility choice and every upload choice.</summary>
     private static WorkflowHubFormState ReadFormState(IFormCollection form)
     {
         var checkedItems = form["item"]
@@ -346,6 +359,14 @@ public static class WorkflowHubUploadHandlers
                 publicItems[artifactId] = form[key].ToString() == "public";
         }
 
+        const string modePrefix = "mode-";
+        var newEntryItems = new HashSet<Guid>();
+        foreach (var key in form.Keys.Where(k => k.StartsWith(modePrefix, StringComparison.OrdinalIgnoreCase)))
+        {
+            if (Guid.TryParse(key[modePrefix.Length..], out var artifactId) && form[key].ToString() == NewEntryMode)
+                newEntryItems.Add(artifactId);
+        }
+
         // A second-round form carries the team chosen earlier. It comes back as the hidden field, so a
         // refused selection does not send the user through the team round again.
         int? teamId = int.TryParse(form["team"].ToString(), NumberStyles.None, CultureInfo.InvariantCulture, out var team)
@@ -353,7 +374,7 @@ public static class WorkflowHubUploadHandlers
             ? team
             : null;
 
-        return new WorkflowHubFormState(checkedItems, publicItems, null, teamId);
+        return new WorkflowHubFormState(checkedItems, publicItems, null, teamId, newEntryItems);
     }
 
     /// <summary>
@@ -366,7 +387,8 @@ public static class WorkflowHubUploadHandlers
             flow.Items.Select(item => item.ArtifactId).ToHashSet(),
             flow.Items.ToDictionary(item => item.ArtifactId, item => item.MakePublic),
             teams,
-            teams is null ? flow.TeamId : null);
+            teams is null ? flow.TeamId : null,
+            flow.Items.Where(item => item.AsNewEntry).Select(item => item.ArtifactId).ToHashSet());
 
     private static async Task<IResult> RedisplayAsync(
         SubmissionDbContext db,

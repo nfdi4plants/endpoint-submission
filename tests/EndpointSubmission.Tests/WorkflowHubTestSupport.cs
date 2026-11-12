@@ -35,6 +35,15 @@ internal sealed class FakeWorkflowHubGateway : IWorkflowHubGateway
             41 + n, $"https://dev.workflowhub.eu/workflows/{41 + n}?version=1", 1, makePublic,
             $"{{\"raw\":{n}}}", $"{{\"policy\":{n}}}", $"{{\"policyResponse\":{n}}}");
 
+    /// <summary>
+    /// Called with the zero-based call number and the entry id by <see cref="CreateVersionAsync"/>. Throws to fail.
+    /// The default answers with the same entry and version 2.
+    /// </summary>
+    public Func<int, int, WorkflowHubUpload> RespondVersion { get; set; } = (n, workflowId) =>
+        new WorkflowHubUpload(
+            workflowId, $"https://dev.workflowhub.eu/workflows/{workflowId}?version=2", 2, false,
+            $"{{\"version\":{n}}}", "", "");
+
     /// <summary>Awaited by <see cref="UploadAsync"/> before it records the call, so a test can hold an upload open.</summary>
     public Func<Task>? BeforeUpload { get; set; }
 
@@ -46,6 +55,7 @@ internal sealed class FakeWorkflowHubGateway : IWorkflowHubGateway
     public Func<CancellationToken, Task>? BeforeExchange { get; set; }
 
     public List<(string BaseUrl, string Token, byte[] Crate, int TeamId, bool MakePublic)> Uploads { get; } = [];
+    public List<(string BaseUrl, string Token, int WorkflowId, byte[] Crate)> Versions { get; } = [];
     public List<(string BaseUrl, string Token)> TeamLists { get; } = [];
     public List<(string BaseUrl, string ClientId, string Code, string RedirectUri, string CodeVerifier)> Exchanges { get; } = [];
     public List<(string BaseUrl, string ClientId, string AccessToken)> Revokes { get; } = [];
@@ -82,6 +92,19 @@ internal sealed class FakeWorkflowHubGateway : IWorkflowHubGateway
         }
 
         return Respond(call, makePublic);
+    }
+
+    public Task<WorkflowHubUpload> CreateVersionAsync(
+        string baseUrl, string token, int workflowId, byte[] crate, CancellationToken ct)
+    {
+        int call;
+        lock (_recorded)
+        {
+            call = Versions.Count;
+            Versions.Add((baseUrl, token, workflowId, crate));
+        }
+
+        return Task.FromResult(RespondVersion(call, workflowId));
     }
 
     public Task RevokeAsync(string baseUrl, string clientId, string accessToken, CancellationToken ct)

@@ -90,6 +90,14 @@ public client. The service holds no client secret. The user ticks items on the p
 "Continue to WorkflowHub", logs in and confirms there, and lands on `/workflowhub/oauth/callback`. That
 request exchanges the code for an access token, lists the user's teams, uploads and revokes the token.
 
+An item that an earlier commit of the same ARC uploaded (same DataHUB, project and target) is offered as a
+new version of its WorkflowHub entry. The preview page names the entry and preselects "Upload as a new
+version of entry N". The user can choose "Upload as a new entry" instead, and only a new entry has a
+visibility and needs a team. A new version keeps the visibility and the teams of its entry, and an account
+without a team can add versions. WorkflowHub decides whether the logged-in person may add a version, and
+when it refuses, the item stays on the page with its choice and the activity log says what WorkflowHub
+answered.
+
 Register one OAuth application per WorkflowHub instance under My Profile, Actions, API Applications.
 Make it a non-confidential application with the scopes `read write` and the redirect URI
 `{PublicBaseUrl}/workflowhub/oauth/callback`. WorkflowHub (Doorkeeper) rejects http redirect URIs
@@ -119,7 +127,7 @@ fail closed when `HookSharedSecret` is absent.
   that request. The RO-Crate snapshot is retained; the PAT is discarded.
 - The WorkflowHub access token lives in one local variable of the OAuth callback request. That request
   revokes it before it answers. The encrypted login cookie holds the submission id, the ticked items with
-  their visibility, the chosen team, the OAuth state, the PKCE verifier, the status token of the preview
+  their visibility and upload choice, the chosen team, the OAuth state, the PKCE verifier, the status token of the preview
   page and the time the login expires. It holds no WorkflowHub token and no PAT.
 - **`ro_crate_url` is caller-supplied and gets fetched**, so it is allowlisted, HTTPS-only, and
   decomposed into generic-package components that the request URL is then rebuilt from — the address

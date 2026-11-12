@@ -16,11 +16,13 @@ namespace EndpointSubmission.Service.Endpoints.WorkflowHub;
 /// <param name="PublicItems">Artifact ids whose visibility stays on "public".</param>
 /// <param name="Teams">The user's teams, known after the WorkflowHub login. With several, the form shows a required radio group.</param>
 /// <param name="TeamId">The team chosen in an earlier round. Without a radio group, the form carries it in a hidden field.</param>
+/// <param name="NewEntryItems">Artifact ids whose choice stays on "Upload as a new entry". Every other item with an earlier entry shows "new version".</param>
 public sealed record WorkflowHubFormState(
     IReadOnlySet<Guid> CheckedItems,
     IReadOnlyDictionary<Guid, bool> PublicItems,
     IReadOnlyList<WorkflowHubTeam>? Teams,
-    int? TeamId = null);
+    int? TeamId = null,
+    IReadOnlySet<Guid>? NewEntryItems = null);
 
 /// <summary>
 /// How many items an upload uploaded, failed, left unknown, partly uploaded or skipped. The upload
@@ -182,18 +184,36 @@ public static class WorkflowHubPreviewHandlers
             .ThenBy(a => a.Identifier, StringComparer.Ordinal)
             .ToList();
 
+        // A ready item may already be on WorkflowHub from an earlier commit of this ARC. One lookup
+        // answers for every item, and the upload asks the same method.
+        var anyReady = ordered.Any(a =>
+            a.Status == PreparedArtifactStatus.Ready && !accessions.ContainsKey($"{a.Kind}/{a.Identifier}"));
+        var earlierEntries = anyReady
+            ? await WorkflowHubEarlierEntries.FindAsync(db, submission, ct)
+            : new Dictionary<string, WorkflowHubEarlierEntry>();
+
         var uploadedRows = new List<string>();
         var readyRows = new List<string>();
         var blockedRows = new List<string>();
+        var anyVersionChoice = false;
         foreach (var a in ordered)
         {
             var attempts = attemptsByArtifact.GetValueOrDefault(a.Id) ?? [];
             if (accessions.TryGetValue($"{a.Kind}/{a.Identifier}", out var accessionNumber))
+            {
                 uploadedRows.Add(UploadedRow(a, instanceBase, accessionNumber, VisibilityNotSet(attempts)));
+            }
             else if (a.Status == PreparedArtifactStatus.Ready)
-                readyRows.Add(ReadyRow(a, formState, instanceBase, uploadAllowed, MayExistOnWorkflowHub(attempts)));
+            {
+                var earlier = earlierEntries.GetValueOrDefault($"{a.Kind}/{a.Identifier}");
+                anyVersionChoice |= earlier is not null;
+                readyRows.Add(ReadyRow(
+                    a, formState, instanceBase, uploadAllowed, MayExistOnWorkflowHub(attempts), earlier));
+            }
             else
+            {
                 blockedRows.Add(BlockedItem(a));
+            }
         }
 
         // Without upload rights the ready items are listed but nothing can be selected.
@@ -256,7 +276,7 @@ public static class WorkflowHubPreviewHandlers
         {
             body = $@"{uploadedSection}
           <form method=""post"" action=""/workflowhub/submissions/{Html.Text(submission.Id.ToString())}/authorize"" data-wfh-upload>
-            <input type=""hidden"" name=""t"" value=""{Html.Text(statusToken)}"">{readySection}{blockedSection}{UploadPanel(formState)}
+            <input type=""hidden"" name=""t"" value=""{Html.Text(statusToken)}"">{readySection}{blockedSection}{UploadPanel(formState, anyVersionChoice)}
           </form>";
         }
         else
@@ -366,13 +386,19 @@ public static class WorkflowHubPreviewHandlers
     }
 
     /// <summary>The panel with the login explanation, the team choice, the notes and the submit button. It sits inside the form.</summary>
-    private static string UploadPanel(WorkflowHubFormState? formState)
+    /// <param name="anyVersionChoice">
+    /// True when an item can go up as a new version. A team is needed for a new entry only, so the radio
+    /// group is not marked required then, because a browser would block a selection that only adds versions.
+    /// The script sets it again while a new entry is selected, and the callback asks for the team otherwise.
+    /// </param>
+    private static string UploadPanel(WorkflowHubFormState? formState, bool anyVersionChoice)
     {
         var teamPicker = "";
         if (formState?.Teams is { Count: > 1 } teams)
         {
+            var required = anyVersionChoice ? "" : " required";
             var radios = string.Concat(teams.Select(team => $@"
-                <label><input type=""radio"" name=""team"" value=""{Html.Text(team.Id.ToString(CultureInfo.InvariantCulture))}"" required> {Html.Text(team.Title)}</label>"));
+                <label><input type=""radio"" name=""team"" value=""{Html.Text(team.Id.ToString(CultureInfo.InvariantCulture))}""{required}> {Html.Text(team.Title)}</label>"));
             teamPicker = $@"
             <fieldset class=""wfh-teams"">
               <legend>WorkflowHub team</legend>{radios}
@@ -438,8 +464,10 @@ public static class WorkflowHubPreviewHandlers
         _ => "info"
     };
 
+    /// <param name="earlier">The entry an earlier commit of this ARC uploaded the item to, or null.</param>
     private static string ReadyRow(
-        ArtifactRow a, WorkflowHubFormState? state, string instanceBase, bool uploadAllowed, bool caution)
+        ArtifactRow a, WorkflowHubFormState? state, string instanceBase, bool uploadAllowed, bool caution,
+        WorkflowHubEarlierEntry? earlier)
     {
         var cautionClass = caution ? " wfh-item-caution" : "";
         var lfsPointers = LfsPointerDetails(a);
@@ -447,9 +475,10 @@ public static class WorkflowHubPreviewHandlers
         if (!uploadAllowed)
         {
             var note = caution ? CautionLine(instanceBase) : "";
+            var onWorkflowHub = earlier is null ? "" : EarlierEntryLine(a, instanceBase, earlier);
             return $@"
               <li class=""wfh-item wfh-item-ready wfh-item-readonly{cautionClass}"">
-                <div class=""wfh-pick"">{Describe(a)}{note}{lfsPointers}</div>
+                <div class=""wfh-pick"">{Describe(a)}{note}{lfsPointers}{onWorkflowHub}</div>
                 <span class=""wfh-size"">{Size(a.SizeBytes)}</span>
               </li>";
         }
@@ -458,21 +487,60 @@ public static class WorkflowHubPreviewHandlers
         var warning = caution ? CautionLine(instanceBase, $"caution-{id}") : "";
         var isChecked = state?.CheckedItems.Contains(a.Id) == true;
         var isPublic = state?.PublicItems.TryGetValue(a.Id, out var publicChoice) == true && publicChoice;
+        var asNewEntry = state?.NewEntryItems?.Contains(a.Id) == true;
+
+        // An item with an earlier entry gets the entry line and the choice. The visibility is for a new
+        // entry only, so the script hides it while the new version is chosen. Without the script the
+        // select stays and says so.
+        var choice = earlier is null ? "" : EarlierEntryChoice(a, instanceBase, earlier, id, asNewEntry);
+        var visibilityAttribute = earlier is null ? "" : " data-wfh-visibility";
+        var visibilityHint = earlier is null
+            ? ""
+            : @"
+                  <small class=""wfh-muted"" data-wfh-visibility-hint>Applies to a new entry only.</small>";
         return $@"
               <li class=""wfh-item wfh-item-ready{cautionClass}"">
                 <div class=""wfh-pick"">
                   <input type=""checkbox"" id=""item-{id}"" name=""item"" value=""{id}""{(caution ? $@" aria-describedby=""caution-{id}"" data-wfh-caution" : "")}{(isChecked ? " checked" : "")}>
-                  <label for=""item-{id}"">{Describe(a)}</label>{warning}{lfsPointers}
+                  <label for=""item-{id}"">{Describe(a)}</label>{warning}{lfsPointers}{choice}
                 </div>
                 <span class=""wfh-size"">{Size(a.SizeBytes)}</span>
-                <div class=""wfh-visibility"">
+                <div class=""wfh-visibility""{visibilityAttribute}>
                   <label for=""visibility-{id}"">Visibility</label>
                   <select id=""visibility-{id}"" name=""visibility-{id}"">
                     <option value=""private""{(isPublic ? "" : " selected")}>Private</option>
                     <option value=""public""{(isPublic ? " selected" : "")}>Public</option>
-                  </select>
+                  </select>{visibilityHint}
                 </div>
               </li>";
+    }
+
+    /// <summary>The line "Already on WorkflowHub as entry N" for an item that an earlier commit uploaded, with a link to the entry.</summary>
+    private static string EarlierEntryLine(ArtifactRow a, string instanceBase, WorkflowHubEarlierEntry earlier)
+    {
+        var entry = earlier.EntryId.ToString(CultureInfo.InvariantCulture);
+        var version = earlier.Version is { } known
+            ? $", version {known.ToString(CultureInfo.InvariantCulture)}"
+            : "";
+        var href = Html.Text($"{instanceBase}/workflows/{Uri.EscapeDataString(entry)}");
+        return $@"
+                  <p class=""wfh-earlier-entry"">Already on WorkflowHub as entry {Html.Text(entry)}{Html.Text(version)}. <a href=""{href}"" target=""_blank"" rel=""noopener noreferrer"">Open <span class=""wfh-sr-only"">{Html.Text(ItemName(a))} </span>on WorkflowHub</a></p>";
+    }
+
+    /// <summary>The entry line and the choice between a new version of the entry (preselected) and a new entry.</summary>
+    /// <param name="id">The escaped artifact id, which makes the field name <c>mode-{id}</c>.</param>
+    private static string EarlierEntryChoice(
+        ArtifactRow a, string instanceBase, WorkflowHubEarlierEntry earlier, string id, bool asNewEntry)
+    {
+        var entry = Html.Text(earlier.EntryId.ToString(CultureInfo.InvariantCulture));
+        return $@"
+                  <div class=""wfh-earlier"">{EarlierEntryLine(a, instanceBase, earlier)}
+                    <fieldset class=""wfh-mode"" data-wfh-mode>
+                      <legend class=""wfh-sr-only"">Upload choice for {Html.Text(ItemName(a))}</legend>
+                      <label><input type=""radio"" name=""mode-{id}"" value=""version""{(asNewEntry ? "" : " checked")}> Upload as a new version of entry {entry}</label>
+                      <label><input type=""radio"" name=""mode-{id}"" value=""new""{(asNewEntry ? " checked" : "")}> Upload as a new entry</label>
+                    </fieldset>
+                  </div>";
     }
 
     /// <summary>The zip paths of the crate's LFS pointer files. Rows from before the list existed give an empty list.</summary>

@@ -29,10 +29,17 @@ public sealed class WfHubGateway : IWorkflowHubGateway
             () => Client.uploadCrate(
                 baseUrl, accessToken, crate, teamId, makePublic ? Visibility.Public : Visibility.Private),
             ct);
-        return new WorkflowHubUpload(
+        return ToUpload(result);
+    }
+
+    public async Task<WorkflowHubUpload> CreateVersionAsync(
+        string baseUrl, string accessToken, int workflowId, byte[] crate, CancellationToken ct)
+        => ToUpload(await Run(() => Client.createVersion(baseUrl, accessToken, workflowId, crate), ct));
+
+    private static WorkflowHubUpload ToUpload(UploadResult result)
+        => new(
             result.WorkflowId, result.Url, result.Version, result.Applied.IsPublic,
             result.RawResponse, result.PolicyRequest, result.PolicyRawResponse);
-    }
 
     public Task RevokeAsync(string baseUrl, string clientId, string accessToken, CancellationToken ct)
         => Run(() => Client.revokeToken(baseUrl, clientId, accessToken), ct);

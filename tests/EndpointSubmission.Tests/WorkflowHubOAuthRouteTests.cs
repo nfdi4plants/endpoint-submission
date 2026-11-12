@@ -98,7 +98,8 @@ public class WorkflowHubOAuthRouteTests
             => $"""<a href="{PreviewPath}" role="button" class="{cssClass}">Back to the submission</a>""";
 
         public List<KeyValuePair<string, string>> Form(
-            (PreparedArtifact Artifact, string Visibility)[] items, string? team = null, string? t = null)
+            (PreparedArtifact Artifact, string Visibility)[] items, string? team = null, string? t = null,
+            (PreparedArtifact Artifact, string Mode)[]? modes = null)
         {
             var fields = new List<KeyValuePair<string, string>> { new("t", t ?? StatusToken) };
             foreach (var (artifact, visibility) in items)
@@ -107,8 +108,42 @@ public class WorkflowHubOAuthRouteTests
                 fields.Add(new($"visibility-{artifact.Id}", visibility));
             }
 
+            foreach (var (artifact, mode) in modes ?? [])
+                fields.Add(new($"mode-{artifact.Id}", mode));
+
             if (team is not null) fields.Add(new("team", team));
             return fields;
+        }
+
+        /// <summary>
+        /// Records that another submission of the same ARC (same host, project and target) uploaded the
+        /// item to an entry on WorkflowHub, so the item has an earlier entry.
+        /// </summary>
+        public void AddEarlierEntry(PreparedArtifact artifact, string number, string? version = null)
+        {
+            var earlier = new Submission
+            {
+                ProjectName = Submission.ProjectName,
+                ProjectId = Submission.ProjectId,
+                DataHubHost = Submission.DataHubHost,
+                Endpoint = "workflowhub",
+                Target = Submission.Target,
+                StatusTokenHash = "earlier-hash",
+                Status = SubmissionStatus.Submitted
+            };
+            using var scope = _app.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<SubmissionDbContext>();
+            db.Submissions.Add(earlier);
+            db.Accessions.Add(new Accession
+            {
+                SubmissionId = earlier.Id,
+                ObjectKind = "workflowhub-" + artifact.ItemKind,
+                Alias = $"{artifact.ItemKind}/{artifact.ItemIdentifier}",
+                AccessionNumber = number,
+                SecondaryAccession = version,
+                CreatedAt = DateTimeOffset.UtcNow.AddHours(-1)
+            });
+            db.SaveChanges();
         }
 
         public Task<(HttpResponseMessage Response, string Body)> Authorize(
@@ -124,9 +159,10 @@ public class WorkflowHubOAuthRouteTests
 
         /// <summary>Posts the form, expects the redirect to WorkflowHub and returns what the login cookie holds.</summary>
         public async Task<WorkflowHubPendingFlow> StartLogin(
-            (PreparedArtifact Artifact, string Visibility)[] items, string? team = null, HttpClient? client = null)
+            (PreparedArtifact Artifact, string Visibility)[] items, string? team = null, HttpClient? client = null,
+            (PreparedArtifact Artifact, string Mode)[]? modes = null)
         {
-            var (response, _) = await Authorize(Form(items, team), client);
+            var (response, _) = await Authorize(Form(items, team, modes: modes), client);
             Assert.Equal(HttpStatusCode.SeeOther, response.StatusCode);
             return Unprotect(CookieValue(response));
         }
@@ -142,11 +178,13 @@ public class WorkflowHubOAuthRouteTests
         }
 
         public WorkflowHubPendingFlow Unprotect(string cookieValue)
-        {
-            var protector = _app.Services.GetRequiredService<IDataProtectionProvider>()
-                .CreateProtector(WorkflowHubFlowCookie.Purpose);
-            return JsonSerializer.Deserialize<WorkflowHubPendingFlow>(protector.Unprotect(cookieValue))!;
-        }
+            => JsonSerializer.Deserialize<WorkflowHubPendingFlow>(Protector().Unprotect(cookieValue))!;
+
+        /// <summary>Protects text the way the login cookie is, so a test can send a cookie the service did not write.</summary>
+        public string Protect(string json) => Protector().Protect(json);
+
+        private IDataProtector Protector()
+            => _app.Services.GetRequiredService<IDataProtectionProvider>().CreateProtector(WorkflowHubFlowCookie.Purpose);
 
         private async Task<(HttpResponseMessage, string)> Send(Func<Task<HttpResponseMessage>> call)
         {
@@ -884,6 +922,276 @@ public class WorkflowHubOAuthRouteTests
         Assert.Contains("""<button type="submit" data-wfh-submit>Continue to WorkflowHub</button>""", html);
         Assert.Contains("""role="status" aria-live="polite" data-wfh-status""", html);
         Assert.DoesNotContain("""type="password" """, html);
+        await site.AssertTokenNowhere();
+    }
+
+    private const string ChosenNewEntry = "new";
+
+    private static (PreparedArtifact, string)[] Mode(PreparedArtifact artifact, string mode) => [(artifact, mode)];
+
+    private static string Selected(PreparedArtifact artifact, string mode)
+        => $"""name="mode-{artifact.Id}" value="{mode}" checked>""";
+
+    [Fact]
+    public async Task The_upload_choice_of_each_item_travels_through_the_login_cookie()
+    {
+        using var site = new Site(extraItems: 1);
+        var third = site.Ready[2];
+        var fields = site.Form(
+            [(site.Align, "public"), (site.Other, "private"), (third, "private")],
+            modes: [(site.Align, "new"), (site.Other, "version"), (third, "something else")]);
+
+        var (response, _) = await site.Authorize(fields);
+
+        Assert.Equal(HttpStatusCode.SeeOther, response.StatusCode);
+        var flow = site.Unprotect(Site.CookieValue(response));
+        Assert.Equal(
+            new[] { (site.Align.Id, true, true), (site.Other.Id, false, false), (third.Id, false, false) },
+            flow.Items.Select(item => (item.ArtifactId, item.MakePublic, item.AsNewEntry)).ToArray());
+        await site.AssertTokenNowhere();
+    }
+
+    [Fact]
+    public async Task An_item_without_a_choice_field_defaults_to_a_new_version()
+    {
+        using var site = new Site();
+
+        var flow = await site.StartLogin(Pick(site.Align, "private"));
+
+        Assert.False(Assert.Single(flow.Items).AsNewEntry);
+    }
+
+    [Fact]
+    public async Task A_login_cookie_from_before_the_upload_choice_existed_still_reads_and_behaves_as_the_default()
+    {
+        using var site = new Site();
+        site.AddEarlierEntry(site.Align, "41", "2");
+        var old = JsonSerializer.Serialize(new
+        {
+            SubmissionId = site.Submission.Id,
+            StatusToken = site.StatusToken,
+            Items = new[] { new { ArtifactId = site.Align.Id, MakePublic = true } },
+            TeamId = (int?)null,
+            State = "old-state",
+            CodeVerifier = "old-verifier",
+            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10)
+        });
+        Assert.DoesNotContain("AsNewEntry", old);
+        using var browser = site.NewClient(handleCookies: false);
+        browser.DefaultRequestHeaders.Add("Cookie", $"{CookieName}={Uri.EscapeDataString(site.Protect(old))}");
+
+        var (response, _) = await site.Callback($"code={Code}&state=old-state", browser);
+
+        Assert.Equal(HttpStatusCode.SeeOther, response.StatusCode);
+        Assert.Equal(41, Assert.Single(site.Gateway.Versions).WorkflowId);
+        Assert.Empty(site.Gateway.Uploads);
+        await site.AssertTokenNowhere();
+    }
+
+    [Fact]
+    public async Task A_form_shown_again_after_a_refused_selection_keeps_the_chosen_upload_choice()
+    {
+        using var site = new Site();
+        site.AddEarlierEntry(site.Align, "41", "2");
+        var fields = site.Form(Pick(site.Align, "public"), modes: Mode(site.Align, "new"));
+        fields.Add(new("item", Guid.NewGuid().ToString()));
+
+        var (response, html) = await site.Authorize(fields);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("A selected item does not belong to this submission.", html);
+        Assert.Contains(Selected(site.Align, "new"), html);
+        Assert.Contains($"""name="mode-{site.Align.Id}" value="version">""", html);
+        Assert.False(response.Headers.Contains("Set-Cookie"));
+        await site.AssertTokenNowhere();
+    }
+
+    [Fact]
+    public async Task A_declined_login_shows_the_form_with_the_chosen_upload_choice()
+    {
+        using var site = new Site();
+        site.AddEarlierEntry(site.Align, "41", "2");
+        var flow = await site.StartLogin(Pick(site.Align, "private"), modes: Mode(site.Align, "new"));
+
+        var (response, html) = await site.Callback($"error=access_denied&state={flow.State}");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains(Selected(site.Align, "new"), html);
+        Assert.Contains($"""name="mode-{site.Align.Id}" value="version">""", html);
+        Assert.Empty(site.Gateway.Versions);
+        Assert.Empty(site.Gateway.Uploads);
+        await site.AssertTokenNowhere();
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task A_selection_that_only_adds_versions_needs_no_team_and_skips_the_team_round_and_the_no_team_page(int teams)
+    {
+        using var site = new Site();
+        site.AddEarlierEntry(site.Align, "41", "2");
+        site.Gateway.Teams = [.. Enumerable.Range(1, teams).Select(n => new WorkflowHubTeam(n, $"Team {n}"))];
+        var flow = await site.StartLogin(Pick(site.Align, "private"));
+
+        var (response, _) = await site.Callback(Site.Confirmed(flow));
+
+        Assert.Equal(HttpStatusCode.SeeOther, response.StatusCode);
+        Assert.EndsWith("&uploaded=1&failed=0&unknown=0&partial=0&skipped=0", response.Headers.Location!.ToString());
+        Assert.Empty(site.Gateway.TeamLists);
+        Assert.Empty(site.Gateway.Uploads);
+        var version = Assert.Single(site.Gateway.Versions);
+        Assert.Equal(("https://dev.workflowhub.eu", AccessToken, 41), (version.BaseUrl, version.Token, version.WorkflowId));
+        Assert.Equal(site.Align.Content, version.Crate);
+        Assert.Equal(("https://dev.workflowhub.eu", "test-client", AccessToken), Assert.Single(site.Gateway.Revokes));
+
+        var db = site.NewContext();
+        Assert.DoesNotContain(db.SubmissionEvents, e => e.Step == "upload.no_team");
+        var accession = Assert.Single(db.Accessions, a => a.SubmissionId == site.Submission.Id);
+        Assert.Equal(("workflow/workflows/align", "41", "2"), (accession.Alias, accession.AccessionNumber, accession.SecondaryAccession));
+
+        var (preview, html) = await site.Get(response.Headers.Location!.PathAndQuery);
+        Assert.Equal(HttpStatusCode.OK, preview.StatusCode);
+        Assert.Contains("<p>1 item uploaded to WorkflowHub.</p>", html);
+        await site.AssertTokenNowhere();
+    }
+
+    [Fact]
+    public async Task A_selection_with_a_new_entry_still_asks_for_the_team_when_the_account_has_several()
+    {
+        using var site = new Site();
+        site.AddEarlierEntry(site.Align, "41", "2");
+        site.Gateway.Teams = [new WorkflowHubTeam(5, "Team Five"), new WorkflowHubTeam(9, "Team Nine")];
+        var first = await site.StartLogin([(site.Align, "private"), (site.Other, "public")]);
+
+        var (picker, html) = await site.Callback(Site.Confirmed(first));
+
+        Assert.Equal(HttpStatusCode.OK, picker.StatusCode);
+        Assert.Contains("You are a member of several WorkflowHub teams.", html);
+        // The page has an item that can be a new version, so the browser must not insist on a team.
+        // The script asks for one while a new entry is selected, and the callback asks again without it.
+        Assert.Contains("""<input type="radio" name="team" value="9">""", html);
+        Assert.DoesNotContain("""name="team" value="9" required""", html);
+        Assert.Contains(Selected(site.Align, "version"), html);
+        Assert.Empty(site.Gateway.Uploads);
+        Assert.Empty(site.Gateway.Versions);
+
+        // Without a chosen team the callback asks again, which is the server side of the check.
+        var again = await site.StartLogin([(site.Align, "private"), (site.Other, "public")]);
+        var (secondPicker, secondHtml) = await site.Callback(Site.Confirmed(again));
+        Assert.Equal(HttpStatusCode.OK, secondPicker.StatusCode);
+        Assert.Contains("You are a member of several WorkflowHub teams.", secondHtml);
+        Assert.Empty(site.Gateway.Uploads);
+        Assert.Empty(site.Gateway.Versions);
+
+        var second = await site.StartLogin([(site.Align, "private"), (site.Other, "public")], team: "9");
+        var (done, _) = await site.Callback(Site.Confirmed(second));
+
+        Assert.Equal(HttpStatusCode.SeeOther, done.StatusCode);
+        Assert.Equal(41, Assert.Single(site.Gateway.Versions).WorkflowId);
+        var upload = Assert.Single(site.Gateway.Uploads);
+        Assert.Equal((9, true), (upload.TeamId, upload.MakePublic));
+        Assert.Equal(site.Other.Content, upload.Crate);
+        await site.AssertTokenNowhere();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_selection_with_a_new_entry_still_gets_the_no_team_page_for_an_account_without_a_team(bool chosenNewEntry)
+    {
+        using var site = new Site();
+        site.AddEarlierEntry(site.Align, "41", "2");
+        // Either another item without an earlier entry, or the new entry choice for the item that has one.
+        var flow = chosenNewEntry
+            ? await site.StartLogin(Pick(site.Align, "private"), modes: Mode(site.Align, ChosenNewEntry))
+            : await site.StartLogin([(site.Align, "private"), (site.Other, "private")]);
+
+        var (response, html) = await site.Callback(Site.Confirmed(flow));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("requires membership in a WorkflowHub team", html);
+        Assert.Equal("upload.no_team", Assert.Single(site.NewContext().SubmissionEvents).Step);
+        Assert.Empty(site.Gateway.Uploads);
+        Assert.Empty(site.Gateway.Versions);
+        Assert.Single(site.Gateway.Revokes);
+        await site.AssertTokenNowhere();
+    }
+
+    [Fact]
+    public async Task The_new_entry_choice_uploads_to_the_team_with_the_chosen_visibility()
+    {
+        using var site = new Site();
+        site.AddEarlierEntry(site.Align, "41", "2");
+        site.Gateway.Teams = [new WorkflowHubTeam(5, "Team Five")];
+        var flow = await site.StartLogin(Pick(site.Align, "public"), modes: Mode(site.Align, ChosenNewEntry));
+
+        var (response, _) = await site.Callback(Site.Confirmed(flow));
+
+        Assert.Equal(HttpStatusCode.SeeOther, response.StatusCode);
+        Assert.Empty(site.Gateway.Versions);
+        var upload = Assert.Single(site.Gateway.Uploads);
+        Assert.Equal((5, true), (upload.TeamId, upload.MakePublic));
+        await site.AssertTokenNowhere();
+    }
+
+    [Fact]
+    public async Task A_forged_form_cannot_choose_the_entry_id()
+    {
+        using var site = new Site();
+        site.AddEarlierEntry(site.Align, "41", "2");
+        var fields = site.Form(Pick(site.Align, "public"), modes: Mode(site.Align, "version"));
+        foreach (var name in new[] { "entry", "entryId", "entry-id", "workflowId", "workflow_id", $"entry-{site.Align.Id}", $"workflowId-{site.Align.Id}" })
+            fields.Add(new(name, "999"));
+
+        var (response, _) = await site.Authorize(fields);
+
+        Assert.Equal(HttpStatusCode.SeeOther, response.StatusCode);
+        var cookie = Site.CookieValue(response);
+        var flow = site.Unprotect(cookie);
+        Assert.DoesNotContain("999", JsonSerializer.Serialize(flow));
+
+        var (done, _) = await site.Callback(Site.Confirmed(flow));
+
+        Assert.Equal(HttpStatusCode.SeeOther, done.StatusCode);
+        Assert.Equal(41, Assert.Single(site.Gateway.Versions).WorkflowId);
+        Assert.Equal(
+            "41", Assert.Single(site.NewContext().Accessions, a => a.SubmissionId == site.Submission.Id).AccessionNumber);
+        await site.AssertTokenNowhere();
+    }
+
+    [Fact]
+    public async Task A_refused_new_version_shows_the_error_on_the_preview_and_keeps_the_item_selectable()
+    {
+        using var site = new Site();
+        site.AddEarlierEntry(site.Align, "41", "2");
+        site.Gateway.RespondVersion = (_, _) => throw new WorkflowHubGatewayException(
+            WorkflowHubFailureKind.Rejected, 403, "You may not edit this workflow.", null,
+            rawBody: $"{{\"error\":\"{AccessToken}\"}}");
+        var flow = await site.StartLogin(Pick(site.Align, "private"));
+
+        var (response, _) = await site.Callback(Site.Confirmed(flow));
+
+        Assert.Equal(HttpStatusCode.SeeOther, response.StatusCode);
+        Assert.EndsWith("&uploaded=0&failed=1&unknown=0&partial=0&skipped=0", response.Headers.Location!.ToString());
+        Assert.Single(site.Gateway.Versions);
+        Assert.Empty(site.Gateway.Uploads);
+        Assert.Single(site.Gateway.Revokes);
+        Assert.Empty(site.NewContext().Accessions.Where(a => a.SubmissionId == site.Submission.Id));
+
+        var (preview, html) = await site.Get(response.Headers.Location!.PathAndQuery);
+
+        Assert.Equal(HttpStatusCode.OK, preview.StatusCode);
+        Assert.Contains("wfh-notice wfh-notice-error", html);
+        Assert.Contains("1 item could not be uploaded.", html);
+        Assert.Contains("<details open>", html);
+        Assert.Contains("Uploading workflow workflows/align as a new version of entry 41 failed.", html);
+        Assert.Contains("(HTTP 403): You may not edit this workflow.", html);
+        Assert.Contains("&quot;Upload as a new entry&quot;", html);
+        Assert.Contains("get edit rights on entry 41 and try the new version again", html);
+        Assert.Contains($"""<input type="checkbox" id="item-{site.Align.Id}" name="item" value="{site.Align.Id}">""", html);
+        Assert.Contains(Selected(site.Align, "version"), html);
+        Assert.DoesNotContain("wfh-item-caution", html);
         await site.AssertTokenNowhere();
     }
 }

@@ -935,4 +935,180 @@ public class PageRenderingTests
 
         Assert.Contains($@"wfh-notice wfh-notice-{style}"" role=""status"" data-wfh-result", html);
     }
+
+    /// <summary>Seeds another submission of the same ARC that uploaded an item to an entry on WorkflowHub.</summary>
+    private static void AddEarlierEntry(
+        SubmissionDbContext db, string identifier, string number, string? version = null,
+        Action<Submission>? change = null)
+    {
+        var earlier = Submission("workflowhub", "arc", "earlier-hash");
+        change?.Invoke(earlier);
+        db.Submissions.Add(earlier);
+        db.Accessions.Add(new Accession
+        {
+            SubmissionId = earlier.Id,
+            ObjectKind = "workflowhub-workflow",
+            Alias = $"workflow/{identifier}",
+            AccessionNumber = number,
+            SecondaryAccession = version
+        });
+    }
+
+    private static PreparedArtifact[] AlignAndOther(Submission s)
+        =>
+        [
+            Artifact(s, "workflow", "workflows/align", PreparedArtifactStatus.Ready, title: "Align reads"),
+            Artifact(s, "workflow", "workflows/other", PreparedArtifactStatus.Ready)
+        ];
+
+    [Fact]
+    public async Task WorkflowHub_preview_offers_a_new_version_of_the_earlier_entry_with_it_preselected()
+    {
+        var (html, artifacts, _) = await RenderWorkflowHub(
+            AlignAndOther, (db, _) => AddEarlierEntry(db, "workflows/align", "42", "3"));
+
+        var id = artifacts[0].Id;
+        var row = ItemWith(html, "workflows/align");
+        Assert.Contains("Already on WorkflowHub as entry 42, version 3.", row);
+        Assert.Contains(
+            """<a href="https://dev.workflowhub.eu/workflows/42" target="_blank" rel="noopener noreferrer">Open <span class="wfh-sr-only">Align reads </span>on WorkflowHub</a>""",
+            row);
+        Assert.Contains($"""<input type="radio" name="mode-{id}" value="version" checked> Upload as a new version of entry 42</label>""", row);
+        Assert.Contains($"""<input type="radio" name="mode-{id}" value="new"> Upload as a new entry</label>""", row);
+        Assert.Contains(@"<div class=""wfh-visibility"" data-wfh-visibility>", row);
+        Assert.Contains($"""<select id="visibility-{id}" name="visibility-{id}">""", row);
+        Assert.Contains("Applies to a new entry only.", row);
+        Assert.Contains($"""<input type="checkbox" id="item-{id}" name="item" value="{id}">""", row);
+
+        var other = ItemWith(html, "workflows/other");
+        Assert.DoesNotContain("mode-", other);
+        Assert.DoesNotContain("Already on WorkflowHub", other);
+        Assert.DoesNotContain("data-wfh-visibility", other);
+        Assert.DoesNotContain("Applies to a new entry only.", other);
+        Assert.Contains(@"<div class=""wfh-visibility"">", other);
+
+        // The entry of an earlier commit is no upload of this submission, so the page has no uploaded section.
+        Assert.DoesNotContain("wfh-uploaded-heading", html);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_preview_leaves_out_the_version_when_the_record_has_none()
+    {
+        var (html, _, _) = await RenderWorkflowHub(
+            AlignAndOther, (db, _) => AddEarlierEntry(db, "workflows/align", "42"));
+
+        var row = ItemWith(html, "workflows/align");
+        Assert.Contains("Already on WorkflowHub as entry 42.", row);
+        Assert.DoesNotContain("version 3", row);
+        Assert.DoesNotContain(", version", row);
+        Assert.Contains("Upload as a new version of entry 42", row);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_preview_escapes_the_item_name_around_the_entry_and_the_choice()
+    {
+        var (html, _, _) = await RenderWorkflowHub(
+            s => [Artifact(s, "workflow", "workflows/align", PreparedArtifactStatus.Ready, title: "<script>x()</script>")],
+            (db, _) => AddEarlierEntry(db, "workflows/align", "42", "3"));
+
+        Assert.DoesNotContain("<script>x()", html);
+        Assert.Contains(@"Open <span class=""wfh-sr-only"">&lt;script&gt;x()&lt;/script&gt; </span>on WorkflowHub</a>", html);
+        Assert.Contains("<legend class=\"wfh-sr-only\">Upload choice for &lt;script&gt;x()&lt;/script&gt;</legend>", html);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_preview_ignores_earlier_entries_of_the_other_target_and_other_projects()
+    {
+        var (html, _, _) = await RenderWorkflowHub(
+            AlignAndOther,
+            (db, _) =>
+            {
+                AddEarlierEntry(db, "workflows/align", "42", "3", e => e.Target = SubmissionTarget.Production);
+                AddEarlierEntry(db, "workflows/other", "43", "1", e => e.ProjectId = 3);
+            });
+
+        Assert.DoesNotContain("Already on WorkflowHub", html);
+        Assert.DoesNotContain("mode-", html);
+        Assert.DoesNotContain("data-wfh-visibility", html);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_preview_names_the_earlier_entry_without_a_choice_in_a_read_only_item()
+    {
+        var (html, _, _) = await RenderWorkflowHub(
+            AlignAndOther,
+            (db, _) => AddEarlierEntry(db, "workflows/align", "42", "3", e => e.Target = SubmissionTarget.Production),
+            target: SubmissionTarget.Production,
+            submissionOptions: Options.Create(new EndpointSubmissionOptions { AllowProductionTarget = false }));
+
+        var row = ItemWith(html, "workflows/align");
+        Assert.Contains("wfh-item-readonly", row);
+        Assert.Contains("Already on WorkflowHub as entry 42, version 3.", row);
+        Assert.Contains(@"href=""https://workflowhub.eu/workflows/42""", row);
+        Assert.DoesNotContain("mode-", html);
+        Assert.DoesNotContain("<form", html);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_preview_keeps_an_item_selectable_with_its_choice_after_a_refused_new_version()
+    {
+        var refused = "WorkflowHub rejected the new version of entry 42 (HTTP 403): not allowed to edit";
+        var (html, artifacts, _) = await RenderWorkflowHub(
+            AlignAndOther,
+            (db, s) =>
+            {
+                AddEarlierEntry(db, "workflows/align", "42", "3");
+                AddAttempt(db, s, "workflows/align", 1, SubmissionStatus.Failed, refused);
+            });
+
+        var row = ItemWith(html, "workflows/align");
+        Assert.DoesNotContain("wfh-item-caution", row);
+        Assert.DoesNotContain(CautionText, row);
+        Assert.Contains($"""<input type="checkbox" id="item-{artifacts[0].Id}" name="item" value="{artifacts[0].Id}">""", row);
+        Assert.Contains($"""name="mode-{artifacts[0].Id}" value="version" checked""", row);
+        Assert.Contains($"""name="mode-{artifacts[0].Id}" value="new">""", row);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_preview_flags_an_item_whose_new_version_had_an_unknown_outcome()
+    {
+        var unknown = $"{WorkflowHubUploadService.UnknownOutcomeLead}workflow workflows/align. A new version of entry 42 may have been created. " +
+                      "Check https://dev.workflowhub.eu/workflows/42 before uploading this item again.";
+        var (html, artifacts, _) = await RenderWorkflowHub(
+            AlignAndOther,
+            (db, s) =>
+            {
+                AddEarlierEntry(db, "workflows/align", "42", "3");
+                AddAttempt(db, s, "workflows/align", 1, SubmissionStatus.Failed, unknown);
+            });
+
+        var row = ItemWith(html, "workflows/align");
+        Assert.StartsWith(@"<li class=""wfh-item wfh-item-ready wfh-item-caution"">", row);
+        Assert.Contains(CautionText, row);
+        Assert.Contains(CautionLink, row);
+        Assert.Contains($"""name="mode-{artifacts[0].Id}" value="version" checked""", row);
+    }
+
+    [Fact]
+    public async Task WorkflowHub_preview_shows_a_chosen_new_entry_again_when_the_form_comes_back()
+    {
+        var db = new SubmissionDbContext(new DbContextOptionsBuilder<SubmissionDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options);
+        var submission = Submission("workflowhub", "arc", "hash");
+        var artifacts = AlignAndOther(submission);
+        db.Submissions.Add(submission);
+        db.PreparedArtifacts.AddRange(artifacts);
+        AddEarlierEntry(db, "workflows/align", "42", "3");
+        await db.SaveChangesAsync();
+        var state = new WorkflowHubFormState(
+            new HashSet<Guid> { artifacts[0].Id }, new Dictionary<Guid, bool>(), null, null,
+            new HashSet<Guid> { artifacts[0].Id });
+
+        var html = await WorkflowHubPreviewHandlers.RenderViewAsync(
+            db, submission, "token", "https://dev.workflowhub.eu", "", default, state);
+
+        Assert.Contains($"""name="mode-{artifacts[0].Id}" value="version">""", html);
+        Assert.Contains($"""name="mode-{artifacts[0].Id}" value="new" checked>""", html);
+    }
 }

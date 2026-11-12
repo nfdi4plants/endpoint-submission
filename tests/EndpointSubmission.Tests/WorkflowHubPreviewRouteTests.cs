@@ -140,4 +140,63 @@ public class WorkflowHubPreviewRouteTests
         Assert.Contains(@"type=""checkbox""", html);
         Assert.Contains("/js/workflowhub.js", html);
     }
+
+    [Fact]
+    public async Task The_preview_route_offers_a_new_version_when_an_earlier_commit_uploaded_the_item()
+    {
+        using var factory = new WorkflowHubAppFactory(new FakeWorkflowHubGateway());
+        var minted = new StatusTokenService().Mint();
+        Submission NewSubmission(string tokenHash, int projectId) => new()
+        {
+            ProjectId = projectId,
+            ProjectName = "group/my-arc",
+            DataHubHost = "git.example.org",
+            Endpoint = "workflowhub",
+            StatusTokenHash = tokenHash
+        };
+        var current = NewSubmission(minted.Hash, 2);
+        var earlier = NewSubmission("earlier-hash", 2);
+        var unrelated = NewSubmission("unrelated-hash", 3);
+        PreparedArtifact Artifact(string identifier) => new()
+        {
+            SubmissionId = current.Id,
+            ItemKind = "workflow",
+            ItemIdentifier = identifier,
+            Status = PreparedArtifactStatus.Ready,
+            Content = [1, 2, 3],
+            SizeBytes = 3
+        };
+        var align = Artifact("workflows/align");
+        var other = Artifact("workflows/other");
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<SubmissionDbContext>();
+            db.Submissions.AddRange(current, earlier, unrelated);
+            db.PreparedArtifacts.AddRange(align, other);
+            db.Accessions.AddRange(
+                new Accession
+                {
+                    SubmissionId = earlier.Id, ObjectKind = "workflowhub-workflow",
+                    Alias = "workflow/workflows/align", AccessionNumber = "42", SecondaryAccession = "3"
+                },
+                new Accession
+                {
+                    SubmissionId = unrelated.Id, ObjectKind = "workflowhub-workflow",
+                    Alias = "workflow/workflows/other", AccessionNumber = "43", SecondaryAccession = "1"
+                });
+            await db.SaveChangesAsync();
+        }
+
+        var page = await factory.CreateClient().GetAsync($"/workflowhub/submissions/{current.Id}?t={minted.Token}");
+        var html = await page.Content.ReadAsStringAsync();
+
+        Assert.Equal(System.Net.HttpStatusCode.OK, page.StatusCode);
+        Assert.Contains("Already on WorkflowHub as entry 42, version 3.", html);
+        Assert.Contains(@"href=""https://dev.workflowhub.eu/workflows/42""", html);
+        Assert.Contains($"""name="mode-{align.Id}" value="version" checked>""", html);
+        Assert.Contains($"""name="mode-{align.Id}" value="new">""", html);
+        Assert.DoesNotContain($"mode-{other.Id}", html);
+        Assert.DoesNotContain("entry 43", html);
+    }
 }

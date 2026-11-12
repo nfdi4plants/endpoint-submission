@@ -20,6 +20,13 @@ public interface IWorkflowHubGateway
     Task<WorkflowHubUpload> UploadAsync(
         string baseUrl, string accessToken, byte[] crate, int teamId, bool makePublic, CancellationToken ct);
 
+    /// <summary>
+    /// Uploads one crate as a new version of an existing entry. The client reads the entry and sends
+    /// the crate with the entry's own teams. It sends no visibility request, so the entry keeps its policy.
+    /// </summary>
+    Task<WorkflowHubUpload> CreateVersionAsync(
+        string baseUrl, string accessToken, int workflowId, byte[] crate, CancellationToken ct);
+
     /// <summary>Ends an access token (RFC 7009).</summary>
     Task RevokeAsync(string baseUrl, string clientId, string accessToken, CancellationToken ct);
 }

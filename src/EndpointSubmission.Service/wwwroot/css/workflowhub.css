@@ -252,6 +252,30 @@
 /* An opened list makes the row tall. The size and visibility columns stay at the top of the row. */
 .wfh-item-ready:has(.wfh-lfs[open]) { align-items: start; }
 
+/* An item that an earlier commit already put on WorkflowHub: the entry line and the choice. */
+.wfh-earlier {
+  grid-column: 2;
+  margin: 0.35rem 0 0;
+  font-size: 0.875rem;
+}
+.wfh-earlier-entry { margin: 0 0 0.35rem; }
+.wfh-item-readonly .wfh-earlier-entry { margin: 0.35rem 0 0; }
+.wfh-mode {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.wfh-mode label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: start;
+  width: auto;
+  margin: 0 0 0.25rem;
+  font-weight: 400;
+}
+.wfh-mode input[type="radio"] { margin: 0.15rem 0 0; }
+
 .wfh-size,
 .wfh-entry {
   color: var(--pico-muted-color);
@@ -272,6 +296,7 @@
   min-width: 9rem;
   margin: 0;
 }
+.wfh-visibility[hidden] { display: none; }
 
 .wfh-select-all {
   display: flex;
