@@ -25,6 +25,10 @@ module Protocol =
                 | _ -> Decode.fail $"'{s}' is not an integer id")
         ]
 
+    /// The ids of the teams in `relationships.projects.data`, which a person and a workflow both carry.
+    let private projectIdsDecoder: Decoder<int list> =
+        Decode.at [ "relationships"; "projects"; "data" ] (Decode.list (Decode.field "id" stringlyInt))
+
     let private personDecoder: Decoder<PersonInfo> =
         Decode.field
             "data"
@@ -35,12 +39,7 @@ module Protocol =
                       TeamIds = teamIds })
                 (Decode.field "id" stringlyInt)
                 (Decode.at [ "attributes"; "title" ] Decode.string)
-                (Decode.oneOf [
-                    Decode.at
-                        [ "relationships"; "projects"; "data" ]
-                        (Decode.list (Decode.field "id" stringlyInt))
-                    Decode.succeed []
-                ]))
+                (Decode.oneOf [ projectIdsDecoder; Decode.succeed [] ]))
 
     let private teamDecoder: Decoder<Team> =
         Decode.field
@@ -89,6 +88,13 @@ module Protocol =
 
     let parseUploadResponse (json: string) : Result<UploadResponse, string> =
         Thoth.Json.Newtonsoft.Decode.fromString uploadResponseDecoder json
+
+    /// The ids of the teams of a workflow entry. An entry that lists no team is an error, because
+    /// a new version cannot be posted without one.
+    let parseWorkflowTeamIds (json: string) : Result<int list, string> =
+        match Thoth.Json.Newtonsoft.Decode.fromString (Decode.field "data" projectIdsDecoder) json with
+        | Ok [] -> Error "the entry lists no team"
+        | result -> result
 
     /// The detail for a `Rejected` error: the JSONAPI error messages when the body carries
     /// them, the raw body otherwise.

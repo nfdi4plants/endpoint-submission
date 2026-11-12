@@ -65,14 +65,29 @@ let tests =
                     Expect.stringStarts result.Url (baseUrl.TrimEnd '/') "url must resolve against the base url"
                     Expect.equal result.Applied Private "expected the private policy"
 
-                    use get = authed HttpMethod.Get (WorkflowHubApi.workflowPath result.WorkflowId)
-                    let response = http.Send get
-                    let body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+                    let entryPolicyAccess () =
+                        use get = authed HttpMethod.Get (WorkflowHubApi.workflowPath result.WorkflowId)
+                        let response = http.Send get
+                        let body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
 
-                    match Protocol.parseUploadResponse body with
-                    | Ok entry ->
-                        Expect.equal entry.PolicyAccess (Some WorkflowHubApi.PolicyPrivate) "the entry must be private"
-                    | Error e -> failtestf "could not parse the entry: %s" e
+                        match Protocol.parseUploadResponse body with
+                        | Ok entry -> entry.PolicyAccess
+                        | Error e -> failtestf "could not parse the entry: %s" e
+
+                    Expect.equal (entryPolicyAccess ()) (Some WorkflowHubApi.PolicyPrivate) "the entry must be private"
+
+                    // WorkflowHub answers the crate alone with HTTP 500, so this proves the entry's own
+                    // teams are read and sent along.
+                    let versioned =
+                        Client.createVersion(baseUrl, token, result.WorkflowId, crate).GetAwaiter().GetResult()
+
+                    Expect.equal versioned.WorkflowId result.WorkflowId "a new version must keep the entry id"
+                    Expect.equal versioned.Version 2 "expected the second version"
+
+                    Expect.equal
+                        (entryPolicyAccess ())
+                        (Some WorkflowHubApi.PolicyPrivate)
+                        "the entry must still be private after the new version"
                 finally
                     // The library is upload-only by design; the test harness deletes directly.
                     use delete = authed HttpMethod.Delete (WorkflowHubApi.workflowPath result.WorkflowId)

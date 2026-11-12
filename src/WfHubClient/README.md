@@ -93,9 +93,11 @@ supplies and the client sends as `Authorization: Bearer`:
 `getCurrentPerson` / `listTeams` for the team picker, `uploadCrate` (multipart POST, then a
 policy PATCH that applies the chosen visibility; note the entry is briefly world-readable
 between the two calls), `setVisibility` as the recovery call when that PATCH failed, and
-`createVersion` for adding a version to an existing entry. The base URL is always an explicit
-parameter. Pass `https://dev.workflowhub.eu` to rehearse against the sandbox; nothing defaults
-to production. The client never deletes or overwrites, and tokens are never stored or logged.
+`createVersion` for adding a version to an existing entry (it reads the entry first and sends the
+entry's own teams with the crate, because WorkflowHub answers the crate alone with HTTP 500). The
+base URL is always an explicit parameter. Pass `https://dev.workflowhub.eu` to rehearse against
+the sandbox; nothing defaults to production. The client never deletes or overwrites, and tokens
+are never stored or logged.
 
 ### Getting an access token
 

@@ -106,6 +106,15 @@ let private errorBody status =
 
 let private crate = Encoding.UTF8.GetBytes "not-really-a-zip"
 
+/// The JSONAPI body of `GET /workflows/42` for an entry that belongs to the given teams.
+let private entryWithTeams (teamIds: string list) =
+    let teams =
+        teamIds |> List.map (fun id -> $"""{{ "id": "{id}", "type": "projects" }}""") |> String.concat ", "
+
+    $"""{{ "data": {{ "id": "42", "type": "workflows",
+  "attributes": {{ "title": "My workflow", "latest_version": 1 }},
+  "relationships": {{ "projects": {{ "data": [ {teams} ] }} }} }} }}"""
+
 let private expectError (expected: UploadError -> bool) (work: unit -> 'a) =
     try
         work () |> ignore
@@ -275,7 +284,7 @@ let tests =
                 [ "/people/current"; "/projects/5"; "/projects/9" ]
                 "wrong request sequence"
 
-        testCase "createVersion posts the crate to the version route without a policy PATCH" <| fun () ->
+        testCase "createVersion reads the entry, then posts the crate with the entry's teams and no policy PATCH" <| fun () ->
             let versionBody =
                 """{ "data": { "id": "42", "type": "workflows",
   "attributes": { "title": "My workflow", "latest_version": 2, "policy": { "access": "download" } },
@@ -283,6 +292,7 @@ let tests =
 
             use stub =
                 new StubServer(function
+                    | "GET", "/workflows/42" -> 200, entryWithTeams [ "89"; "90" ]
                     | "POST", "/workflows/42/create_version" -> 200, versionBody
                     | _ -> 404, "")
 
@@ -292,13 +302,78 @@ let tests =
             Expect.equal result.Version 2 "wrong version"
             Expect.equal result.Applied Public "expected the entry's exposed policy"
             Expect.equal (result.PolicyRequest, result.PolicyRawResponse) ("", "") "createVersion sends no policy PATCH"
-            let post = stub.Requests |> List.exactlyOne
-            Expect.isFalse (post.Headers.ContainsKey "Accept") "the multipart POST must not send Accept"
+
+            match stub.Requests with
+            | [ get; post ] ->
+                Expect.equal (get.Method, get.Path) ("GET", "/workflows/42") "the entry must be read first"
+                Expect.equal get.Headers.["Authorization"] $"Bearer {token}" "wrong auth header"
+                Expect.equal get.Headers.["Accept"] "application/json" "JSON GETs must ask for JSON"
+
+                Expect.equal (post.Method, post.Path) ("POST", "/workflows/42/create_version") "wrong version POST"
+                Expect.equal post.Headers.["Authorization"] $"Bearer {token}" "wrong auth header"
+                Expect.isFalse (post.Headers.ContainsKey "Accept") "the multipart POST must not send Accept"
+
+                Expect.equal
+                    (post.Parts |> List.map (fun (name, _, _) -> name) |> List.sort)
+                    [ "ro_crate"; "workflow[project_ids][]"; "workflow[project_ids][]" ]
+                    "wrong multipart field names"
+
+                Expect.contains post.Parts ("ro_crate", Some "ro-crate.zip", "not-really-a-zip") "wrong crate part"
+
+                Expect.equal
+                    (post.Parts
+                     |> List.filter (fun (name, _, _) -> name = "workflow[project_ids][]")
+                     |> List.map (fun (_, _, value) -> value)
+                     |> List.sort)
+                    [ "89"; "90" ]
+                    "the version must carry the entry's own teams"
+            | other ->
+                failtestf "expected GET then POST, got %A" (other |> List.map (fun r -> r.Method, r.Path))
+
+        testCase "createVersion posts nothing when the entry cannot be read" <| fun () ->
+            use stub =
+                new StubServer(function
+                    | "POST", "/workflows/42/create_version" -> 200, ""
+                    | _ -> 404, errorBody 404)
+
+            let e =
+                expectError
+                    (function
+                     | Rejected(404, detail) -> detail.Contains "the server said 404"
+                     | _ -> false)
+                    (fun () -> Client.createVersion(stub.BaseUrl, token, 42, crate).GetAwaiter().GetResult())
+
+            Expect.isFalse (e.Message.Contains token) "the token must not appear in errors"
 
             Expect.equal
-                (post.Parts |> List.map (fun (name, _, _) -> name))
-                [ "ro_crate" ]
-                "a version POST carries no project ids"
+                (stub.Requests |> List.map (fun r -> r.Method, r.Path))
+                [ ("GET", "/workflows/42") ]
+                "nothing may be posted when the entry cannot be read"
+
+        testCase "createVersion posts nothing when the entry lists no team" <| fun () ->
+            let withoutRelationships =
+                """{ "data": { "id": "42", "type": "workflows", "attributes": { "title": "My workflow" } } }"""
+
+            for entryBody in [ entryWithTeams []; withoutRelationships ] do
+                use stub =
+                    new StubServer(function
+                        | "GET", "/workflows/42" -> 200, entryBody
+                        | "POST", "/workflows/42/create_version" -> 200, ""
+                        | _ -> 404, "")
+
+                let e =
+                    expectError
+                        (function
+                         | Transport message -> message.StartsWith "Unexpected response body:"
+                         | _ -> false)
+                        (fun () -> Client.createVersion(stub.BaseUrl, token, 42, crate).GetAwaiter().GetResult())
+
+                Expect.isFalse (e.Message.Contains token) "the token must not appear in errors"
+
+                Expect.equal
+                    (stub.Requests |> List.map (fun r -> r.Method, r.Path))
+                    [ ("GET", "/workflows/42") ]
+                    "nothing may be posted for an entry without a team"
 
         testCase "a Rejected error carries the raw response body" <| fun () ->
             use stub = new StubServer(fun _ -> 422, errorBody 422)

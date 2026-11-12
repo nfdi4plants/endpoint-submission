@@ -34,7 +34,8 @@ module WorkflowHubApi =
     let CrateFileName = "ro-crate.zip"
     /// The content type of the crate part.
     let CrateContentType = "application/zip"
-    /// The multipart field that carries the id of the team that owns the new entry, once per team.
+    /// The multipart field that carries a team id, once per team. A new entry gets the team that
+    /// owns it. A new version of an entry gets the entry's own teams.
     let TeamFieldName = "workflow[project_ids][]"
 
 module WorkflowHubLimits =

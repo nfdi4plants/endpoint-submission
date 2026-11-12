@@ -321,14 +321,19 @@ module Client =
         : Task<UploadResult> =
         uploadCrateWithin UploadTimeout (baseUrl, accessToken, crateZip, teamId, visibility)
 
-    /// Adds a version to an existing entry. Versions inherit the entry's policy, so `Applied`
-    /// reports the policy the response exposes (conservatively `Private` when it does not).
+    /// Adds a version to an existing entry. It reads the entry first, because WorkflowHub answers
+    /// the crate alone with HTTP 500, and posts the crate with the entry's own teams. Nothing is
+    /// posted when the entry cannot be read or lists no team. Versions inherit the entry's policy,
+    /// so `Applied` reports the policy the response exposes (conservatively `Private` when it does not).
     let createVersion
         (baseUrl: string, accessToken: string, workflowId: int, crateZip: byte[])
         : Task<UploadResult> =
         task {
+            let! entryBody = getJson baseUrl (WorkflowHubApi.workflowPath workflowId) accessToken
+            let teamIds = parsed (Protocol.parseWorkflowTeamIds entryBody)
+
             let! response, rawBody =
-                postCrate UploadTimeout baseUrl (WorkflowHubApi.createVersionPath workflowId) accessToken crateZip []
+                postCrate UploadTimeout baseUrl (WorkflowHubApi.createVersionPath workflowId) accessToken crateZip teamIds
 
             let applied =
                 if response.PolicyAccess = Some WorkflowHubApi.PolicyPublic then Public else Private

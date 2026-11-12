@@ -15,9 +15,10 @@ dotnet test tests/WfHubClient.Tests
 Unset the variables again afterwards so later test runs stay offline.
 
 The live suite uploads a minimal crate as `Private`, checks the entry's policy really is
-`no_access`, uploads a second crate whose ARC carries a recognizable license and checks
-WorkflowHub reports that license, and deletes both entries again directly (the library itself
-has no delete). Besides exercising the client end to end it verifies the response-shape
+`no_access`, adds a second version of that entry with `createVersion` and checks the entry keeps
+its id, reaches version 2 and stays private, uploads another crate whose ARC carries a
+recognizable license and checks WorkflowHub reports that license, and deletes both entries again
+directly (the library itself has no delete). Besides exercising the client end to end it verifies the response-shape
 assumptions the offline stub tests encode (`/people/current` relationships, `/projects/{id}`
 titles, upload response fields).
 
