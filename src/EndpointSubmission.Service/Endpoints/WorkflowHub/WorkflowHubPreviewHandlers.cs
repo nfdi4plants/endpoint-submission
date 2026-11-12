@@ -313,7 +313,7 @@ public static class WorkflowHubPreviewHandlers
         if (c.Unknown > 0)
             lines.Add($"{Plural(c.Unknown, "item has", "items have")} an unknown result. The entry may exist on WorkflowHub and may be public. Check before uploading again.");
         if (c.Failed > 0)
-            lines.Add($"{Plural(c.Failed, "item", "items")} could not be uploaded. The activity log below says what happened and whether an entry may exist on WorkflowHub.");
+            lines.Add($"{Plural(c.Failed, "item", "items")} could not be uploaded. The activity log at the bottom of this page says what happened and whether an entry may exist on WorkflowHub.");
         if (c.Skipped > 0)
             lines.Add($"{Plural(c.Skipped, "item was", "items were")} skipped because {(c.Skipped == 1 ? "it is" : "they are")} already on WorkflowHub.");
 
